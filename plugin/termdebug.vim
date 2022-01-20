@@ -732,6 +732,7 @@ func s:HandleDisasmMsg(msg)
       if lnum != 0
         exe 'sign unplace ' . s:asm_id
         exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
+        exe 'normal ' . lnum . 'z.'
       endif
 
       call win_gotoid(curwinid)
@@ -1268,6 +1269,7 @@ func s:GotoAsmwinOrCreateIt()
     else
       exe 'sign unplace ' . s:asm_id
       exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
+      exe 'normal ' . lnum . 'z.'
     endif
   endif
 endfunc
@@ -1304,6 +1306,7 @@ func s:HandleCursor(msg)
       else
         exe 'sign unplace ' . s:asm_id
         exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
+        exe 'normal ' . lnum . 'z.'
       endif
 
       call win_gotoid(curwinid)
@@ -1329,6 +1332,7 @@ func s:HandleCursor(msg)
       normal! zv
       exe 'sign unplace ' . s:pc_id
       exe 'sign place ' . s:pc_id . ' line=' . lnum . ' name=debugPC file=' . fname
+      exe 'normal ' . lnum . 'z.'
       if !exists('b:save_signcolumn')
         let b:save_signcolumn = &signcolumn
         call add(s:signcolumn_buflist, bufnr())
