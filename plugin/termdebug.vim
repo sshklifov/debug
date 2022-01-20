@@ -101,8 +101,8 @@ func s:Highlight(init, old, new)
 endfunc
 
 call s:Highlight(1, '', &background)
-hi default debugBreakpoint term=reverse ctermbg=red guibg=red
-hi default debugBreakpointDisabled term=reverse ctermbg=gray guibg=gray
+hi default debugBreakpoint gui=reverse guibg=red
+hi default debugBreakpointDisabled gui=reverse guibg=gray
 
 func s:StartDebug(bang, ...)
   " First argument is the command to debug, second core file or process ID.
@@ -1370,8 +1370,10 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
     if !a:modifiedFlag
       let actionTaken = 'created'
     elseif enabled == 'n'
+      exe 'sign define debugBreakpoint' . printf('%d.%d', id, subid) . ' texthl=debugBreakpointDisabled'
       let actionTaken = 'disabled'
     else
+      exe 'sign define debugBreakpoint' . printf('%d.%d', id, subid) . ' texthl=debugBreakpoint'
       let actionTaken = 'enabled'
     endif
     echomsg 'Breakpoint ' . nr . ' ' . actionTaken . posMsg
