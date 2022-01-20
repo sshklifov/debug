@@ -814,43 +814,11 @@ func s:InstallCommands()
   let save_cpo = &cpo
   set cpo&vim
 
-  command -nargs=? Break call s:SetBreakpoint(<q-args>)
-  command Clear call s:ClearBreakpoint()
-  command Step call s:SendCommandIfStopped('-exec-step')
-  command Over call s:SendCommandIfStopped('-exec-next')
-  command Finish call s:SendCommandIfStopped('-exec-finish')
-  command -nargs=* Run call s:Run(<q-args>)
-  command -nargs=* Arguments call s:SendCommand('-exec-arguments ' . <q-args>)
-
-  if s:way == 'prompt'
-    command Stop call s:PromptInterrupt()
-    command Continue call s:SendCommand('continue')
-  else
-    command Stop call s:SendCommand('-exec-interrupt')
-    " using -exec-continue results in CTRL-C in the gdb window not working,
-    " communicating via commbuf (= use of SendCommand) has the same result
-    "command Continue  call s:SendCommand('-exec-continue')
-    command Continue call chansend(s:gdb_job_id, "continue\r")
-  endif
-
-  command -range -nargs=* Evaluate call s:Evaluate(<range>, <q-args>)
   command Gdb call win_gotoid(s:gdbwin)
   command Program call s:GotoProgram()
   command Source call s:GotoSourcewinOrCreateIt()
   command Asm call s:GotoAsmwinOrCreateIt()
   command Winbar call s:InstallWinbar()
-
-  if !exists('g:termdebug_map_K') || g:termdebug_map_K
-    " let s:k_map_saved = maparg('K', 'n', 0, 1)
-    let s:k_map_saved = {}
-    for map in nvim_get_keymap('n')
-      if map.lhs ==# 'K'
-        let s:k_map_saved = map
-        break
-      endif
-    endfor
-    nnoremap K :Evaluate<CR>
-  endif
 
   let &cpo = save_cpo
 endfunc
@@ -872,38 +840,11 @@ endfunc
 
 " Delete installed debugger commands in the current window.
 func s:DeleteCommands()
-  delcommand Break
-  delcommand Clear
-  delcommand Step
-  delcommand Over
-  delcommand Finish
-  delcommand Run
-  delcommand Arguments
-  delcommand Stop
-  delcommand Continue
-  delcommand Evaluate
   delcommand Gdb
   delcommand Program
   delcommand Source
   delcommand Asm
   delcommand Winbar
-
-  if exists('s:k_map_saved')
-    if empty(s:k_map_saved)
-      nunmap K
-    else
-      " call mapset('n', 0, s:k_map_saved)
-      let mode = s:k_map_saved.mode !=# ' ' ? s:k_map_saved.mode : ''
-      call nvim_set_keymap(mode, 'K', s:k_map_saved.rhs, {
-        \ 'expr': s:k_map_saved.expr ? v:true : v:false,
-        \ 'noremap': s:k_map_saved.noremap ? v:true : v:false,
-        \ 'nowait': s:k_map_saved.nowait ? v:true : v:false,
-        \ 'script': s:k_map_saved.script ? v:true : v:false,
-        \ 'silent': s:k_map_saved.silent ? v:true : v:false,
-        \ })
-    endif
-    unlet s:k_map_saved
-  endif
 
   exe 'sign unplace ' . s:pc_id
   for [id, entries] in items(s:breakpoints)
