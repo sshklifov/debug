@@ -481,13 +481,6 @@ func s:StartDebugCommon(dict)
     au BufUnload * call s:BufUnloaded()
     au OptionSet background call s:Highlight(0, v:option_old, v:option_new)
   augroup END
-
-  " Run the command if the bang attribute was given and got to the debug
-  " window.
-  if get(a:dict, 'bang', 0)
-    call s:SendCommand('-exec-run')
-    call win_gotoid(s:ptywin)
-  endif
 endfunc
 
 " Send a command to gdb.  "cmd" is the string without line terminator.
