@@ -450,7 +450,6 @@ func s:StartDebug_prompt(dict)
   endif
 
   call s:StartDebugCommon(a:dict)
-  startinsert
 endfunc
 
 func s:StartDebugCommon(dict)
@@ -481,6 +480,11 @@ func s:StartDebugCommon(dict)
     au BufUnload * call s:BufUnloaded()
     au OptionSet background call s:Highlight(0, v:option_old, v:option_new)
   augroup END
+
+  call win_gotoid(s:ptywin)
+  q "Hide the command window
+  call win_gotoid(s:gdbwin)
+  startinsert
 endfunc
 
 " Send a command to gdb.  "cmd" is the string without line terminator.
