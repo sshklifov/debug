@@ -502,22 +502,11 @@ func TermDebugSendCommand(cmd)
   if s:way == 'prompt'
     call chansend(s:gdbjob, a:cmd . "\n")
   else
-    let do_continue = 0
     if !s:stopped
-      let do_continue = 1
-      if s:way == 'prompt'
-        " Need to send a signal to get the UI to listen.  Strangely this is only
-        " needed once.
-        call jobstop(s:gdbjob)
-      else
-        Stop
-      endif
-      sleep 10m
+      echoerr "Cannot send command '" . a:cmd . "'. Program is running."
+      return
     endif
     call chansend(s:gdb_job_id, a:cmd . "\r")
-    if do_continue
-      Continue
-    endif
   endif
 endfunc
 
@@ -862,21 +851,15 @@ endfunc
 " :Break - Set a breakpoint at the cursor position.
 func s:SetBreakpoint(at)
   " Setting a breakpoint may not work while the program is running.
-  " Interrupt to make it work.
-  let do_continue = 0
   if !s:stopped
-    let do_continue = 1
-    Stop
-    sleep 10m
+    echoerr "Cannot set breakpoint at '" . a:at . "'. Program is running."
+    return
   endif
 
   " Use the fname:lnum format, older gdb can't handle --source.
   let at = empty(a:at) ?
   \ fnameescape(expand('%:p')) . ':' . line('.') : a:at
   call s:SendCommand('-break-insert ' . at)
-  if do_continue
-    Continue
-  endif
 endfunc
 
 " :Clear - Delete a breakpoint at the cursor position.
