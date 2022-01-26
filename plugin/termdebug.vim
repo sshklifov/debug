@@ -645,6 +645,10 @@ func s:EndDebugCommon()
     exe 'bwipe! ' . s:ptybuf
   endif
 
+  if exists('s:gdbbuf') && s:gdbbuf
+    exe 'bwipe! ' . s:gdbbuf
+  endif
+
   " Restore 'signcolumn' in all buffers for which it was set.
   call win_gotoid(s:sourcewin)
   let was_buf = bufnr()
