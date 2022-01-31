@@ -649,6 +649,11 @@ func s:EndDebugCommon()
     exe 'bwipe! ' . s:gdbbuf
   endif
 
+  let asmbuf = bufnr('Termdebug-asm-listing')
+  if asmbuf > 0
+    exe 'bwipe! ' . asmbuf
+  endif
+
   " Restore 'signcolumn' in all buffers for which it was set.
   call win_gotoid(s:sourcewin)
   let was_buf = bufnr()
