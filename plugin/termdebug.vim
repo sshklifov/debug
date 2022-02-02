@@ -814,6 +814,7 @@ func s:InstallCommands()
   command Source call s:GotoSourcewinOrCreateIt()
   command Asm call s:GotoAsmwinOrCreateIt()
   command Winbar call s:InstallWinbar()
+  command -nargs=1 Break call s:GoToBreakpoint(<f-args>)
 
   let &cpo = save_cpo
 endfunc
@@ -840,6 +841,7 @@ func s:DeleteCommands()
   delcommand Source
   delcommand Asm
   delcommand Winbar
+  delcommand Break
 
   exe 'sign unplace ' . s:pc_id
   for [id, entries] in items(s:breakpoints)
@@ -1298,6 +1300,23 @@ endfunc
 func! s:SplitMsg(s)
   return split(a:s, '{.\{-}}\zs')
 endfunction
+
+func! s:GoToBreakpoint(id)
+	let entries = items(s:breakpoints[a:id])
+	if empty(entries)
+		echoerr "No entry for breakpoint " . id
+		return
+	endif
+	" Get any value in the dictionary
+	let valueIndex = 1
+	let entry = entries[0][valueIndex]
+
+	let lnum = entry['lnum']
+	let fname = entry['fname']
+	call win_gotoid(s:sourcewin)
+	exe "edit " . fnameescape(fname)
+	exe "normal " . lnum . "G"
+endfunc
 
 " Handle setting a breakpoint
 " Will update the sign that shows the breakpoint
