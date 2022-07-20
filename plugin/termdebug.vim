@@ -794,23 +794,12 @@ func s:CommOutput(job_id, msgs, event)
   endfor
 endfunc
 
-func s:GotoProgram()
-  if has('win32')
-    if executable('powershell')
-      call system(printf('powershell -Command "add-type -AssemblyName microsoft.VisualBasic;[Microsoft.VisualBasic.Interaction]::AppActivate(%d);"', s:pid))
-    endif
-  else
-    call win_gotoid(s:ptywin)
-  endif
-endfunc
-
 " Install commands in the current window to control the debugger.
 func s:InstallCommands()
   let save_cpo = &cpo
   set cpo&vim
 
   command Gdb call win_gotoid(s:gdbwin)
-  command Program call s:GotoProgram()
   command Source call s:GotoSourcewinOrCreateIt()
   command Asm call s:GotoAsmwinOrCreateIt()
   command Winbar call s:InstallWinbar()
@@ -837,7 +826,6 @@ endfunc
 " Delete installed debugger commands in the current window.
 func s:DeleteCommands()
   delcommand Gdb
-  delcommand Program
   delcommand Source
   delcommand Asm
   delcommand Winbar
