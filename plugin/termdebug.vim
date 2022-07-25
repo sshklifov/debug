@@ -202,7 +202,7 @@ endfunc
 func s:StartDebug_term(dict)
   " Open a terminal window without a job, to run the debugged program in.
   execute s:vertical ? 'vnew' : 'new'
-  let s:pty_job_id = termopen('tail -f /dev/null;#gdb program')
+  let s:pty_job_id = termopen('tail -f /dev/null')
   if s:pty_job_id == 0
     echoerr 'invalid argument (or job table is full) while opening terminal window'
     return
@@ -457,10 +457,9 @@ func s:StartDebugCommon(dict)
   " There can be only one.
   sign define debugPC linehl=debugPC
 
-  " Install debugger commands in the text window.
-  call win_gotoid(s:sourcewin)
   call s:InstallCommands()
   call win_gotoid(s:gdbwin)
+  exe "file Gdb terminal"
 
   " Contains breakpoints that have been placed, key is a string with the GDB
   " breakpoint number.
@@ -482,7 +481,8 @@ func s:StartDebugCommon(dict)
   augroup END
 
   call win_gotoid(s:ptywin)
-  q "Hide the command window
+  exe "file Communication terminal"
+  q "Close the command window
   call win_gotoid(s:gdbwin)
   startinsert
 endfunc
