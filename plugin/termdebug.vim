@@ -799,10 +799,10 @@ func s:InstallCommands()
   let save_cpo = &cpo
   set cpo&vim
 
-  command Gdb call win_gotoid(s:gdbwin)
-  command Source call s:GotoSourcewinOrCreateIt()
-  command Asm call s:GotoAsmwinOrCreateIt()
-  command -nargs=1 Break call s:GoToBreakpoint(<f-args>)
+  command! Gdb call s:GotoGdbwinOrCreateIt()
+  command! Source call s:GotoSourcewinOrCreateIt()
+  command! Asm call s:GotoAsmwinOrCreateIt()
+  command! -nargs=1 Break call s:GoToBreakpoint(<f-args>)
 
   let &cpo = save_cpo
 endfunc
@@ -1127,8 +1127,17 @@ endfunc
 
 func s:GotoSourcewinOrCreateIt()
   if !win_gotoid(s:sourcewin)
-    new
+    below new
     let s:sourcewin = win_getid(winnr())
+    " TODO Set the current frame so the source file is loaded into buffer
+  endif
+endfunc
+
+func s:GotoGdbwinOrCreateIt()
+  if !win_gotoid(s:gdbwin)
+    above new
+    let s:gdbwin = win_getid(winnr())
+    exe "b " . s:gdbbuf
   endif
 endfunc
 
