@@ -70,6 +70,10 @@ set cpo&vim
 command -nargs=* -complete=file -bang Termdebug call s:StartDebug(<bang>0, <f-args>)
 command -nargs=+ -complete=file -bang TermdebugCommand call s:StartDebugCommand(<bang>0, <f-args>)
 
+function! TermdebugRunning()
+  return exists('s:gdbwin')
+endfunction
+
 " Name of the gdb command, defaults to "gdb".
 if !exists('g:termdebugger')
   let g:termdebugger = 'gdb'
