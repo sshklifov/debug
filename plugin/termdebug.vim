@@ -70,7 +70,7 @@ set cpo&vim
 command -nargs=* -complete=file -bang Termdebug call s:StartDebug(<bang>0, <f-args>)
 command -nargs=+ -complete=file -bang TermdebugCommand call s:StartDebugCommand(<bang>0, <f-args>)
 
-function! TermdebugRunning()
+function! TermdebugIsOpen()
   return exists('s:gdbwin')
 endfunction
 
