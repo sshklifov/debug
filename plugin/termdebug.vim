@@ -474,10 +474,6 @@ func s:StartDebugCommon(dict)
   " {'44': {'0': entry}, '123': {'0': entry, '1': entry, '2': entry}}
   let s:breakpoints = {}
 
-  " Contains breakpoints by file/lnum.  The key is "fname:lnum".
-  " Each entry is a list of breakpoint IDs at that position.
-  let s:breakpoint_locations = {}
-
   augroup TermDebug
     au BufRead * call s:BufRead()
     au BufUnload * call s:BufUnloaded()
@@ -825,7 +821,6 @@ func s:DeleteCommands()
     endfor
   endfor
   unlet s:breakpoints
-  unlet s:breakpoint_locations
 
   sign undefine debugPC
   for val in s:BreakpointSigns
@@ -1302,12 +1297,6 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
     let lnum = substitute(msg, '.*line="\([^"]*\)".*', '\1', '')
     let entry['fname'] = fname
     let entry['lnum'] = lnum
-
-    let bploc = printf('%s:%d', fname, lnum)
-    if !has_key(s:breakpoint_locations, bploc)
-      let s:breakpoint_locations[bploc] = []
-    endif
-    let s:breakpoint_locations[bploc] += [id]
 
     if bufloaded(fname)
       call s:PlaceSign(id, subid, entry)
