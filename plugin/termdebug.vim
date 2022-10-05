@@ -836,52 +836,10 @@ endfunc
 
 " :Break - Set a breakpoint at the cursor position.
 func s:SetBreakpoint(at)
-  " Setting a breakpoint may not work while the program is running.
-  if !s:stopped
-    echoerr "Cannot set breakpoint at '" . a:at . "'. Program is running."
-    return
-  endif
-
   " Use the fname:lnum format, older gdb can't handle --source.
   let at = empty(a:at) ?
   \ fnameescape(expand('%:p')) . ':' . line('.') : a:at
   call s:SendCommand('-break-insert ' . at)
-endfunc
-
-" :Clear - Delete a breakpoint at the cursor position.
-func s:ClearBreakpoint()
-  let fname = fnameescape(expand('%:p'))
-  let lnum = line('.')
-  let bploc = printf('%s:%d', fname, lnum)
-  if has_key(s:breakpoint_locations, bploc)
-    let idx = 0
-    let nr = 0
-    for id in s:breakpoint_locations[bploc]
-      if has_key(s:breakpoints, id)
-        " Assume this always works, the reply is simply "^done".
-        call s:SendCommand('-break-delete ' . id)
-        for subid in keys(s:breakpoints[id])
-          exe 'sign unplace ' . s:Breakpoint2SignNumber(id, subid)
-        endfor
-        unlet s:breakpoints[id]
-        unlet s:breakpoint_locations[bploc][idx]
-        let nr = id
-        break
-      else
-        let idx += 1
-      endif
-    endfor
-    if nr != 0
-      if empty(s:breakpoint_locations[bploc])
-        unlet s:breakpoint_locations[bploc]
-      endif
-      echomsg 'Breakpoint ' . id . ' cleared from line ' . lnum . '.'
-    else
-      echoerr 'Internal error trying to remove breakpoint at line ' . lnum . '!'
-    endif
-  else
-    echomsg 'No breakpoint to remove at line ' . lnum . '.'
-  endif
 endfunc
 
 func s:Run(args)
