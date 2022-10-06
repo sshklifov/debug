@@ -1238,10 +1238,13 @@ endfunc
 " Will update the sign that shows the breakpoint
 func s:HandleNewBreakpoint(msg, modifiedFlag)
   if a:msg !~ 'fullname='
-    " a watch or a pending breakpoint does not have a file name
+    " A watch or a pending breakpoint does not have a file name
     if a:msg =~ 'pending='
       let nr = substitute(a:msg, '.*number=\"\([0-9.]*\)\".*', '\1', '')
       let target = substitute(a:msg, '.*pending=\"\([^"]*\)\".*', '\1', '')
+      " Mark breakpoint as pending.
+      let entry = {'pending': 1}
+      let s:breakpoints[nr] = entry
       echomsg 'Breakpoint ' . nr . ' (' . target  . ') pending.'
     endif
     return
@@ -1273,24 +1276,14 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
 
     if bufloaded(fname)
       call s:PlaceBreakpointSign(id, entry)
-      let posMsg = ' at line ' . lnum . '.'
-    else
-      let posMsg = ' in ' . fname . ' at line ' . lnum . '.'
     endif
 
+    let wasPending = has_key(entry, "pending")
+    if wasPending
+      unlet entry["pending"]
+      echomsg 'Pending breakpoint ' . id . ' loaded'
+    endif
     return
-
-    " TODO Print debug message
-    " if !a:modifiedFlag
-    "   let actionTaken = 'created'
-    " elseif enabled == 'n'
-    "   exe 'sign define debugBreakpoint' . string(id) . ' texthl=debugBreakpointDisabled'
-    "   let actionTaken = 'disabled'
-    " else
-    "   exe 'sign define debugBreakpoint' . printf('%d', id) . ' texthl=debugBreakpoint'
-    "   let actionTaken = 'enabled'
-    " endif
-    " echomsg 'Breakpoint ' . id . ' ' . actionTaken . posMsg
   endfor
 endfunc
 
@@ -1329,7 +1322,7 @@ endfunc
 func s:BufRead()
   let fname = expand('<afile>:p')
   for [id, entry] in items(s:breakpoints)
-    if entry['fname'] == fname
+    if has_key(entry, 'fname') && entry['fname'] == fname
       call s:PlaceBreakpointSign(id, entry)
     endif
   endfor
