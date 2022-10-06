@@ -506,15 +506,6 @@ func TermDebugSendCommand(cmd)
   endif
 endfunc
 
-" Send a command only when stopped.  Used for :Next and :Step.
-func s:SendCommandIfStopped(cmd)
-  if s:stopped
-    call s:SendCommand(a:cmd)
-  " else
-    " call ch_log('dropping command, program is running: ' . a:cmd)
-  endif
-endfunc
-
 " Function called when entering a line in the prompt buffer.
 func s:PromptCallback(text)
   call s:SendCommand(a:text)
