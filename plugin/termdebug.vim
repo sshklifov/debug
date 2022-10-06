@@ -815,7 +815,9 @@ func s:DeleteCommands()
 
   for [id, entry] in items(s:breakpoints)
     exe 'sign unplace ' . s:Breakpoint2SignNumber(id)
-    exe "sign undefine debugBreakpoint" . id
+    if !has_key(entry, 'pending')
+      exe "sign undefine debugBreakpoint" . id
+    endif
   endfor
 
   unlet s:breakpoints
