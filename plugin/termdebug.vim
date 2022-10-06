@@ -814,14 +814,6 @@ func s:DeleteCommands()
   unlet s:breakpoints
 endfunc
 
-" :Break - Set a breakpoint at the cursor position.
-func s:SetBreakpoint(at)
-  " Use the fname:lnum format, older gdb can't handle --source.
-  let at = empty(a:at) ?
-  \ fnameescape(expand('%:p')) . ':' . line('.') : a:at
-  call s:SendCommand('-break-insert ' . at)
-endfunc
-
 func s:Run(args)
   if a:args != ''
     call s:SendCommand('-exec-arguments ' . a:args)
