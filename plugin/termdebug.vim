@@ -473,7 +473,6 @@ func s:StartDebugCommon(dict)
 
   augroup TermDebug
     au BufRead * call s:BufRead()
-    au BufUnload * call s:BufUnloaded()
     au OptionSet background call s:Highlight(0, v:option_old, v:option_new)
   augroup END
 
@@ -1298,7 +1297,6 @@ endfunc
 func s:PlaceBreakpointSign(id, entry)
   let nr = printf('%d', a:id)
   exe 'sign place ' . s:Breakpoint2SignNumber(a:id) . ' line=' . a:entry['lnum'] . ' name=debugBreakpoint' . nr . ' priority=110 file=' . a:entry['fname']
-  let a:entry['placed'] = 1
 endfunc
 
 " Handle deleting a breakpoint
@@ -1310,10 +1308,7 @@ func s:HandleBreakpointDelete(msg)
   endif
   if has_key(s:breakpoints, id)
     let entry = s:breakpoints[id]
-    if has_key(entry, 'placed')
-      exe 'sign unplace ' . s:Breakpoint2SignNumber(id)
-      unlet entry['placed']
-    endif
+    exe 'sign unplace ' . s:Breakpoint2SignNumber(id)
     unlet s:breakpoints[id]
     echomsg 'Breakpoint ' . id . ' cleared.'
   endif
@@ -1336,16 +1331,6 @@ func s:BufRead()
   for [id, entry] in items(s:breakpoints)
     if entry['fname'] == fname
       call s:PlaceBreakpointSign(id, entry)
-    endif
-  endfor
-endfunc
-
-" Handle a BufUnloaded autocommand event: unplace any signs.
-func s:BufUnloaded()
-  let fname = expand('<afile>:p')
-  for [id, entry] in items(s:breakpoints)
-    if entry['fname'] == fname
-      let entry['placed'] = 0
     endif
   endfor
 endfunc
