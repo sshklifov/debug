@@ -1070,7 +1070,7 @@ func s:HandleError(msg)
     let s:evalFromBalloonExpr = 0
     return
   endif
-  let msgVal = substitute(a:msg, '.*msg="\(.*\)"', '\1', '')
+  let msgVal = s:SubstituteOrEmpty(a:msg, '.*msg="\(.*\)"', '\1', '')
   echoerr substitute(msgVal, '\\"', '"', 'g')
 endfunc
 
@@ -1175,7 +1175,7 @@ func s:HandleCursor(msg)
   endif
 
   if a:msg =~ '^\(\*stopped\|=thread-selected\)' && filereadable(fname)
-    let lnum = substitute(a:msg, '.*line="\([^"]*\)".*', '\1', '')
+    let lnum = s:SubstituteOrEmpty(a:msg, '.*line="\([^"]*\)".*', '\1', '')
     if lnum =~ '^[0-9]*$'
       call s:GotoSourcewinOrCreateIt()
       if expand('%:p') != fnamemodify(fname, ':p')
@@ -1234,14 +1234,22 @@ func! s:GoToBreakpoint(id)
   exe "normal " . lnum . "G"
 endfunc
 
+function s:SubstituteOrEmpty(string, pat, sub, flags)
+  let res = substitute(a:string, a:pat, a:sub, a:flags)
+  if res == a:string
+    return ""
+  endif
+  return res
+endfunction
+
 " Handle setting a breakpoint
 " Will update the sign that shows the breakpoint
 func s:HandleNewBreakpoint(msg, modifiedFlag)
   if a:msg !~ 'fullname='
     " A watch or a pending breakpoint does not have a file name
     if a:msg =~ 'pending='
-      let nr = substitute(a:msg, '.*number=\"\([0-9.]*\)\".*', '\1', '')
-      let target = substitute(a:msg, '.*pending=\"\([^"]*\)\".*', '\1', '')
+      let nr = s:SubstituteOrEmpty(a:msg, '.*number=\"\([0-9.]*\)\".*', '\1', '')
+      let target = s:SubstituteOrEmpty(a:msg, '.*pending=\"\([^"]*\)\".*', '\1', '')
       " Mark breakpoint as pending.
       let entry = {'pending': 1}
       let s:breakpoints[nr] = entry
@@ -1249,16 +1257,14 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
     endif
     return
   endif
-  " TODO Multiple breakpoint handling
-  let enabled = "y"
   for msg in split(a:msg, '{.\{-}}\zs')
     let fname = s:GetFullname(msg)
-    let id = substitute(msg, '.*number="\([0-9]*\)[."].*', '\1', '')
-    if substitute(msg, '.*enabled="\([yn]\)".*', '\1', '') == "n"
-      let enabled = "n"
-    endif
-    let lnum = substitute(msg, '.*line="\([^"]*\)".*', '\1', '')
-    if empty(fname) || empty(id) || empty(enabled) || empty(lnum)
+    let id = s:SubstituteOrEmpty(msg, '.*number="\([0-9]*\)[."].*', '\1', '')
+    let enabled = tolower(s:SubstituteOrEmpty(msg, '.*enabled="\([ynN]\)".*', '\1', ''))
+    let addr = s:SubstituteOrEmpty(msg, '.*addr="\([^"]\)".*', '\1', '')
+    let lnum = s:SubstituteOrEmpty(msg, '.*line="\([^"]*\)".*', '\1', '')
+
+    if empty(id)
       continue
     endif
 
@@ -1295,7 +1301,7 @@ endfunc
 " Handle deleting a breakpoint
 " Will remove the sign that shows the breakpoint
 func s:HandleBreakpointDelete(msg)
-  let id = substitute(a:msg, '.*id="\([0-9]*\)\".*', '\1', '')
+  let id = s:SubstituteOrEmpty(a:msg, '.*id="\([0-9]*\)\".*', '\1', '')
   if empty(id)
     return
   endif
@@ -1310,7 +1316,7 @@ endfunc
 " Handle the debugged program starting to run.
 " Will store the process ID in s:pid
 func s:HandleProgramRun(msg)
-  let nr = substitute(a:msg, '.*pid="\([0-9]*\)\".*', '\1', '') + 0
+  let nr = s:SubstituteOrEmpty(a:msg, '.*pid="\([0-9]*\)\".*', '\1', '') + 0
   if nr == 0
     return
   endif
