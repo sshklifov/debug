@@ -93,10 +93,8 @@ let s:asm_lines = []
 let s:asm_addr = ''
 
 " Take a breakpoint number as used by GDB and turn it into an integer.
-" The breakpoint may contain a dot: 123.4 -> 123004
-" The main breakpoint has a zero subid.
-func s:Breakpoint2SignNumber(id, subid)
-  return s:break_id + a:id * 1000 + a:subid
+func s:Breakpoint2SignNumber(id)
+  return s:break_id + a:id
 endfunction
 
 func s:Highlight(init, old, new)
@@ -471,11 +469,6 @@ func s:StartDebugCommon(dict)
 
   " Contains breakpoints that have been placed, key is a string with the GDB
   " breakpoint number.
-  " Each entry is a dict, containing the sub-breakpoints.  Key is the subid.
-  " For a breakpoint that is just a number the subid is zero.
-  " For a breakpoint "123.4" the id is "123" and subid is "4".
-  " Example, when breakpoint "44", "123", "123.1" and "123.2" exist:
-  " {'44': {'0': entry}, '123': {'0': entry, '1': entry, '2': entry}}
   let s:breakpoints = {}
 
   augroup TermDebug
@@ -819,18 +812,14 @@ func s:DeleteCommands()
   delcommand Break
 
   exe 'sign unplace ' . s:pc_id
-  for [id, entries] in items(s:breakpoints)
-    for subid in keys(entries)
-      exe 'sign unplace ' . s:Breakpoint2SignNumber(id, subid)
-    endfor
-  endfor
-  unlet s:breakpoints
-
   sign undefine debugPC
-  for val in s:BreakpointSigns
-    exe "sign undefine debugBreakpoint" . val
+
+  for [id, entry] in items(s:breakpoints)
+    exe 'sign unplace ' . s:Breakpoint2SignNumber(id)
+    exe "sign undefine debugBreakpoint" . id
   endfor
-  let s:BreakpointSigns = []
+
+  unlet s:breakpoints
 endfunc
 
 " :Break - Set a breakpoint at the cursor position.
@@ -1217,44 +1206,33 @@ func s:HandleCursor(msg)
   call win_gotoid(wid)
 endfunc
 
-let s:BreakpointSigns = []
-
-func s:CreateBreakpoint(id, subid, enabled)
-  let nr = printf('%d.%d', a:id, a:subid)
-  if index(s:BreakpointSigns, nr) == -1
-    call add(s:BreakpointSigns, nr)
-    if a:enabled == "n"
-      let hiName = "debugBreakpointDisabled"
-    else
-      let hiName = "debugBreakpoint"
-    endif
-	let signText = substitute(nr, '\..*', '', '')
-	if len(signText) > 2
-		let signText = "*"
-	end
-    exe "sign define debugBreakpoint" . nr . " text=" . signText . " texthl=" . hiName
+func s:DefineBreakpointSign(id, enabled)
+  let nr = printf('%d', a:id)
+  if a:enabled == "n"
+    let hiName = "debugBreakpointDisabled"
+  else
+    let hiName = "debugBreakpoint"
   endif
+  let signText = substitute(nr, '\..*', '', '')
+  if len(signText) > 2
+    " TODO sign text longer than 2 chars
+    let signText = "*"
+  end
+  exe "sign define debugBreakpoint" . nr . " text=" . signText . " texthl=" . hiName
 endfunc
 
-func! s:SplitMsg(s)
-  return split(a:s, '{.\{-}}\zs')
-endfunction
-
 func! s:GoToBreakpoint(id)
-	let entries = items(s:breakpoints[a:id])
-	if empty(entries)
-		echoerr "No entry for breakpoint " . id
-		return
-	endif
-	" Get any value in the dictionary
-	let valueIndex = 1
-	let entry = entries[0][valueIndex]
+  if !has_key(s:breakpoints, a:id)
+    echoerr "No entry for breakpoint " . a:id
+    return
+  endif
 
-	let lnum = entry['lnum']
-	let fname = entry['fname']
-	call win_gotoid(s:sourcewin)
-	exe "edit " . fnameescape(fname)
-	exe "normal " . lnum . "G"
+  let entry = s:breakpoints[a:id]
+  let lnum = entry['lnum']
+  let fname = entry['fname']
+  call win_gotoid(s:sourcewin)
+  exe "edit " . fnameescape(fname)
+  exe "normal " . lnum . "G"
 endfunc
 
 " Handle setting a breakpoint
@@ -1269,33 +1247,25 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
     endif
     return
   endif
-  for msg in s:SplitMsg(a:msg)
+  " TODO Multiple breakpoint handling
+  let enabled = "y"
+  for msg in split(a:msg, '{.\{-}}\zs')
     let fname = s:GetFullname(msg)
-    if empty(fname)
+    let id = substitute(msg, '.*number="\([0-9]*\)[."].*', '\1', '')
+    if substitute(msg, '.*enabled="\([yn]\)".*', '\1', '') == "n"
+      let enabled = "n"
+    endif
+    let lnum = substitute(msg, '.*line="\([^"]*\)".*', '\1', '')
+    if empty(fname) || empty(id) || empty(enabled) || empty(lnum)
       continue
     endif
-    let nr = substitute(msg, '.*number="\([0-9.]*\)\".*', '\1', '')
-    if empty(nr)
-      return
-    endif
 
-    " If "nr" is 123 it becomes "123.0" and subid is "0".
-    " If "nr" is 123.4 it becomes "123.4.0" and subid is "4"; "0" is discarded.
-    let [id, subid; _] = map(split(nr . '.0', '\.'), 'v:val + 0')
-    let enabled = substitute(msg, '.*enabled="\([yn]\)".*', '\1', '')
-    call s:CreateBreakpoint(id, subid, enabled)
-
+    call s:DefineBreakpointSign(id, enabled)
     if has_key(s:breakpoints, id)
-      let entries = s:breakpoints[id]
-    else
-      let entries = {}
-      let s:breakpoints[id] = entries
-    endif
-    if has_key(entries, subid)
-      let entry = entries[subid]
+      let entry = s:breakpoints[id]
     else
       let entry = {}
-      let entries[subid] = entry
+      let s:breakpoints[id] = entry
     endif
 
     let lnum = substitute(msg, '.*line="\([^"]*\)".*', '\1', '')
@@ -1303,44 +1273,47 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
     let entry['lnum'] = lnum
 
     if bufloaded(fname)
-      call s:PlaceSign(id, subid, entry)
+      call s:PlaceBreakpointSign(id, entry)
       let posMsg = ' at line ' . lnum . '.'
     else
       let posMsg = ' in ' . fname . ' at line ' . lnum . '.'
     endif
-    if !a:modifiedFlag
-      let actionTaken = 'created'
-    elseif enabled == 'n'
-      exe 'sign define debugBreakpoint' . printf('%d.%d', id, subid) . ' texthl=debugBreakpointDisabled'
-      let actionTaken = 'disabled'
-    else
-      exe 'sign define debugBreakpoint' . printf('%d.%d', id, subid) . ' texthl=debugBreakpoint'
-      let actionTaken = 'enabled'
-    endif
-    echomsg 'Breakpoint ' . nr . ' ' . actionTaken . posMsg
+
+    return
+
+    " TODO Print debug message
+    " if !a:modifiedFlag
+    "   let actionTaken = 'created'
+    " elseif enabled == 'n'
+    "   exe 'sign define debugBreakpoint' . string(id) . ' texthl=debugBreakpointDisabled'
+    "   let actionTaken = 'disabled'
+    " else
+    "   exe 'sign define debugBreakpoint' . printf('%d', id) . ' texthl=debugBreakpoint'
+    "   let actionTaken = 'enabled'
+    " endif
+    " echomsg 'Breakpoint ' . id . ' ' . actionTaken . posMsg
   endfor
 endfunc
 
-func s:PlaceSign(id, subid, entry)
-  let nr = printf('%d.%d', a:id, a:subid)
-  exe 'sign place ' . s:Breakpoint2SignNumber(a:id, a:subid) . ' line=' . a:entry['lnum'] . ' name=debugBreakpoint' . nr . ' priority=110 file=' . a:entry['fname']
+func s:PlaceBreakpointSign(id, entry)
+  let nr = printf('%d', a:id)
+  exe 'sign place ' . s:Breakpoint2SignNumber(a:id) . ' line=' . a:entry['lnum'] . ' name=debugBreakpoint' . nr . ' priority=110 file=' . a:entry['fname']
   let a:entry['placed'] = 1
 endfunc
 
 " Handle deleting a breakpoint
 " Will remove the sign that shows the breakpoint
 func s:HandleBreakpointDelete(msg)
-  let id = substitute(a:msg, '.*id="\([0-9]*\)\".*', '\1', '') + 0
+  let id = substitute(a:msg, '.*id="\([0-9]*\)\".*', '\1', '')
   if empty(id)
     return
   endif
   if has_key(s:breakpoints, id)
-    for [subid, entry] in items(s:breakpoints[id])
-      if has_key(entry, 'placed')
-        exe 'sign unplace ' . s:Breakpoint2SignNumber(id, subid)
-        unlet entry['placed']
-      endif
-    endfor
+    let entry = s:breakpoints[id]
+    if has_key(entry, 'placed')
+      exe 'sign unplace ' . s:Breakpoint2SignNumber(id)
+      unlet entry['placed']
+    endif
     unlet s:breakpoints[id]
     echomsg 'Breakpoint ' . id . ' cleared.'
   endif
@@ -1360,24 +1333,20 @@ endfunc
 " Handle a BufRead autocommand event: place any signs.
 func s:BufRead()
   let fname = expand('<afile>:p')
-  for [id, entries] in items(s:breakpoints)
-    for [subid, entry] in items(entries)
-      if entry['fname'] == fname
-        call s:PlaceSign(id, subid, entry)
-      endif
-    endfor
+  for [id, entry] in items(s:breakpoints)
+    if entry['fname'] == fname
+      call s:PlaceBreakpointSign(id, entry)
+    endif
   endfor
 endfunc
 
 " Handle a BufUnloaded autocommand event: unplace any signs.
 func s:BufUnloaded()
   let fname = expand('<afile>:p')
-  for [id, entries] in items(s:breakpoints)
-    for [subid, entry] in items(entries)
-      if entry['fname'] == fname
-        let entry['placed'] = 0
-      endif
-    endfor
+  for [id, entry] in items(s:breakpoints)
+    if entry['fname'] == fname
+      let entry['placed'] = 0
+    endif
   endfor
 endfunc
 
