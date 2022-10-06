@@ -74,6 +74,10 @@ function! TermdebugIsOpen()
   return exists('s:gdbwin')
 endfunction
 
+function! TermdebugBreakpoints()
+  return s:breakpoints
+endfunction
+
 " Name of the gdb command, defaults to "gdb".
 if !exists('g:termdebugger')
   let g:termdebugger = 'gdb'
