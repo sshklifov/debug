@@ -1270,7 +1270,7 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
       continue
     endif
 
-    call s:DefineBreakpointSign(id, enabled)
+    " Handle multi breakpoint
     if has_key(s:breakpoints, id)
       let entry = s:breakpoints[id]
     else
@@ -1278,10 +1278,33 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
       let s:breakpoints[id] = entry
     endif
 
-    let lnum = substitute(msg, '.*line="\([^"]*\)".*', '\1', '')
+    if addr == "<MULTIPLE>"
+      let entry['multiple'] = 1
+      let entry['enabled'] = enabled
+    endif
+
+    if empty(fname) || empty(lnum)
+      continue
+    endif
+
+    " Sanity check (for multi breakpoints mainly)
+    if has_key(entry, 'fname') && entry['fname'] != fname
+      echoerr "Assert failed, breakpoint " . id " changed its location. "
+            \ . entry['fname'] . " -> " . fname
+    endif
+    if has_key(entry, 'lnum') && entry['lnum'] != lnum
+      echoerr "Assert failed, breakpoint " . id " changed its location. "
+            \ . entry['lnum'] . " -> " . lnum
+    endif
+
     let entry['fname'] = fname
     let entry['lnum'] = lnum
+    " For multi breakpoints, look at enable state of main breakpoint (e.g. "9" instead of "9.1")
+    if !has_key(entry, 'multiple')
+      let entry['enabled'] = enabled
+    endif
 
+    call s:DefineBreakpointSign(id, enabled)
     if bufloaded(fname)
       call s:PlaceBreakpointSign(id, entry)
     endif
@@ -1291,7 +1314,6 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
       unlet entry["pending"]
       echomsg 'Pending breakpoint ' . id . ' loaded'
     endif
-    return
   endfor
 endfunc
 
