@@ -1127,13 +1127,7 @@ func s:HandleCursor(msg)
     if lnum =~ '^[0-9]*$'
       call s:GotoSourcewinOrCreateIt()
       if expand('%:p') != fnamemodify(fname, ':p')
-        if &modified
-          " TODO: find existing window
-          exe 'split ' . fnameescape(fname)
-          let s:sourcewin = win_getid(winnr())
-        else
-          exe 'edit ' . fnameescape(fname)
-        endif
+        exe 'edit ' . fnameescape(fname)
       endif
       exe lnum
       normal! zv
