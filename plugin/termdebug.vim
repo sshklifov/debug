@@ -798,6 +798,7 @@ func s:InstallCommands()
   command! Gdb call s:GotoGdbwinOrCreateIt()
   command! Source call s:GotoSourcewinOrCreateIt()
   command! Asm call s:GotoAsmwinOrCreateIt()
+  command! Com call s:GotoComwinOrCreateIt()
   command! -nargs=1 Break call s:GoToBreakpoint(<f-args>)
 
   let &cpo = save_cpo
@@ -1070,6 +1071,14 @@ func s:GotoAsmwinOrCreateIt()
       exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
       exe 'normal ' . lnum . 'z.'
     endif
+  endif
+endfunc
+
+func s:GotoComwinOrCreateIt()
+  if !win_gotoid(s:ptywin)
+    tabnew
+    let s:ptywin = win_getid(winnr())
+    exe "b " . s:ptybuf
   endif
 endfunc
 
