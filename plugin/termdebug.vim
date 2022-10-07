@@ -1010,7 +1010,7 @@ func s:HandleError(msg)
     let s:evalFromBalloonExpr = 0
     return
   endif
-  let msgVal = s:MatchGetCapture(a:msg, '.*msg="\(.*\)"')
+  let msgVal = s:MatchGetCapture(a:msg, 'msg="\([^"]*\)"')
   echoerr substitute(msgVal, '\\"', '"', 'g')
 endfunc
 
@@ -1123,7 +1123,7 @@ func s:HandleCursor(msg)
   endif
 
   if a:msg =~ '^\(\*stopped\|=thread-selected\)' && filereadable(fname)
-    let lnum = s:MatchGetCapture(a:msg, '.*line="\([^"]*\)".*')
+    let lnum = s:MatchGetCapture(a:msg, 'line="\([^"]*\)"')
     if lnum =~ '^[0-9]*$'
       call s:GotoSourcewinOrCreateIt()
       if expand('%:p') != fnamemodify(fname, ':p')
@@ -1196,8 +1196,8 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
   if a:msg !~ 'fullname='
     " A watch or a pending breakpoint does not have a file name
     if a:msg =~ 'pending='
-      let nr = s:MatchGetCapture(a:msg, '.*number=\"\([0-9.]*\)\".*')
-      let target = s:MatchGetCapture(a:msg, '.*pending=\"\([^"]*\)\".*')
+      let nr = s:MatchGetCapture(a:msg, 'number=\"\([0-9.]*\)\"')
+      let target = s:MatchGetCapture(a:msg, 'pending=\"\([^"]*\)\"')
       " Mark breakpoint as pending.
       let entry = {'pending': 1}
       let s:breakpoints[nr] = entry
@@ -1207,10 +1207,10 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
   endif
   for msg in split(a:msg, '{.\{-}}\zs')
     let fname = s:GetFullname(msg)
-    let id = s:MatchGetCapture(msg, '.*number="\([0-9]*\)[."].*')
-    let enabled = tolower(s:MatchGetCapture(msg, '.*enabled="\([ynN]\)".*'))
-    let addr = s:MatchGetCapture(msg, '.*addr="\([^"]\)".*')
-    let lnum = s:MatchGetCapture(msg, '.*line="\([^"]*\)".*')
+    let id = s:MatchGetCapture(msg, 'number="\([0-9]*\)[."]')
+    let enabled = tolower(s:MatchGetCapture(msg, 'enabled="\([ynN]\)"'))
+    let addr = s:MatchGetCapture(msg, 'addr="\([^"]*\)"')
+    let lnum = s:MatchGetCapture(msg, 'line="\([^"]*\)"')
 
     if empty(id)
       continue
@@ -1273,7 +1273,7 @@ endfunc
 " Handle deleting a breakpoint
 " Will remove the sign that shows the breakpoint
 func s:HandleBreakpointDelete(msg)
-  let id = s:MatchGetCapture(a:msg, '.*id="\([0-9]*\)\".*')
+  let id = s:MatchGetCapture(a:msg, 'id="\([0-9]*\)\"')
   if empty(id)
     return
   endif
@@ -1288,7 +1288,7 @@ endfunc
 " Handle the debugged program starting to run.
 " Will store the process ID in s:pid
 func s:HandleProgramRun(msg)
-  let nr = s:MatchGetCapture(a:msg, '.*pid="\([0-9]*\)\".*') + 0
+  let nr = s:MatchGetCapture(a:msg, 'pid="\([0-9]*\)\"') + 0
   if nr == 0
     return
   endif
