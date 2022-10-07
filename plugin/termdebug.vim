@@ -1156,10 +1156,6 @@ func s:DefineBreakpointSign(id)
     let hiName = "debugBreakpoint"
   endif
   let signText = substitute(nr, '\..*', '', '')
-  if len(signText) > 2
-    " TODO sign text longer than 2 chars
-    let signText = "*"
-  end
   exe "sign define debugBreakpoint" . nr . " text=" . signText . " texthl=" . hiName
 endfunc
 
