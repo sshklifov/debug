@@ -1234,13 +1234,15 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
     endif
 
     " Sanity check (for multi breakpoints mainly)
-    if has_key(entry, 'fname') && entry['fname'] != fname
-      echoerr "Assert failed, breakpoint " . id " changed its location. "
-            \ . entry['fname'] . " -> " . fname
-    endif
-    if has_key(entry, 'lnum') && entry['lnum'] != lnum
-      echoerr "Assert failed, breakpoint " . id " changed its location. "
-            \ . entry['lnum'] . " -> " . lnum
+    if !a:modifiedFlag
+      if has_key(entry, 'fname') && entry['fname'] != fname
+        echoerr "Assert failed, breakpoint " . id " changed its location. "
+              \ . entry['fname'] . " -> " . fname
+      endif
+      if has_key(entry, 'lnum') && entry['lnum'] != lnum
+        echoerr "Assert failed, breakpoint " . id " changed its location. "
+              \ . entry['lnum'] . " -> " . lnum
+      endif
     endif
 
     let entry['fname'] = fname
