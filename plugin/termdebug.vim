@@ -1156,6 +1156,9 @@ func s:DefineBreakpointSign(id)
     let hiName = "debugBreakpoint"
   endif
   let signText = substitute(nr, '\..*', '', '')
+  if len(signText) > 2
+    let signText = "*"
+  end
   exe "sign define debugBreakpoint" . nr . " text=" . signText . " texthl=" . hiName
 endfunc
 
