@@ -1153,9 +1153,10 @@ func s:HandleCursor(msg)
   call win_gotoid(wid)
 endfunc
 
-func s:DefineBreakpointSign(id, enabled)
+func s:DefineBreakpointSign(id)
+  let enabled = s:breakpoints[a:id]["enabled"]
   let nr = printf('%d', a:id)
-  if a:enabled == "n"
+  if enabled == "n"
     let hiName = "debugBreakpointDisabled"
   else
     let hiName = "debugBreakpoint"
@@ -1252,7 +1253,7 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
       let entry['enabled'] = enabled
     endif
 
-    call s:DefineBreakpointSign(id, enabled)
+    call s:DefineBreakpointSign(id)
     if bufloaded(fname)
       call s:PlaceBreakpointSign(id, entry)
     endif
