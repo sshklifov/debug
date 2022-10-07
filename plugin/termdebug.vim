@@ -70,13 +70,35 @@ set cpo&vim
 command -nargs=* -complete=file -bang Termdebug call s:StartDebug(<bang>0, <f-args>)
 command -nargs=+ -complete=file -bang TermdebugCommand call s:StartDebugCommand(<bang>0, <f-args>)
 
-function! TermdebugIsOpen()
+function! TermDebugIsOpen()
   return exists('s:gdbwin')
 endfunction
 
-function! TermdebugBreakpoints()
-  return s:breakpoints
-endfunction
+function! TermDebugGoToPC()
+  for signsData in sign_getplaced()
+    let signDebugPC = filter(signsData['signs'], {_, s -> s['name'] == "debugPC"})
+    if !empty(signDebugPC)
+      let lnum = signDebugPC[0]['lnum']
+      let bufnr = signsData['bufnr']
+      let col = getpos('.')[2]
+      exe "buffer " . bufnr
+      call cursor(lnum, col)
+      return
+    endif
+  endfor
+endfunc
+
+func TermDebugSendCommand(cmd)
+  if s:way == 'prompt'
+    call chansend(s:gdbjob, a:cmd . "\n")
+  else
+    if !s:stopped
+      echoerr "Cannot send command '" . a:cmd . "'. Program is running."
+      return
+    endif
+    call chansend(s:gdb_job_id, a:cmd . "\r")
+  endif
+endfunc
 
 " Name of the gdb command, defaults to "gdb".
 if !exists('g:termdebugger')
@@ -490,19 +512,6 @@ func s:SendCommand(cmd)
     call chansend(s:gdbjob, a:cmd . "\n")
   else
     call chansend(s:comm_job_id, a:cmd . "\r")
-  endif
-endfunc
-
-" This is global so that a user can create their mappings with this.
-func TermDebugSendCommand(cmd)
-  if s:way == 'prompt'
-    call chansend(s:gdbjob, a:cmd . "\n")
-  else
-    if !s:stopped
-      echoerr "Cannot send command '" . a:cmd . "'. Program is running."
-      return
-    endif
-    call chansend(s:gdb_job_id, a:cmd . "\r")
   endif
 endfunc
 
