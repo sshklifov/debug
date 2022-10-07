@@ -1018,7 +1018,7 @@ func s:GotoSourcewinOrCreateIt()
   if !win_gotoid(s:sourcewin)
     below new
     let s:sourcewin = win_getid(winnr())
-    " TODO Set the current frame so the source file is loaded into buffer
+    call TermDebugGoToPC()
   endif
 endfunc
 
