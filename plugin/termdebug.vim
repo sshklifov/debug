@@ -100,6 +100,19 @@ func TermDebugSendCommand(cmd)
   endif
 endfunc
 
+func TermDebugToggleMessages()
+  if exists("s:capture_buf")
+    exe "bwipe " . s:capture_buf
+    unlet s:capture_buf
+  else
+    let s:capture_buf = bufadd("GDB Messages")
+    call bufload(s:capture_buf)
+    call setbufvar(s:capture_buf, "&buftype", "nofile")
+    call setbufvar(s:capture_buf, "&swapfile", 0)
+    call setbufvar(s:capture_buf, "&buflisted", 1)
+  endif
+endfunc
+
 " Name of the gdb command, defaults to "gdb".
 if !exists('g:termdebugger')
   let g:termdebugger = 'gdb'
@@ -770,11 +783,14 @@ func s:HandleDisasmMsg(msg)
 endfunc
 
 func s:CommOutput(job_id, msgs, event)
-
   for msg in a:msgs
     " remove prefixed NL
     if msg[0] == "\n"
       let msg = msg[1:]
+    endif
+    if exists("s:capture_buf")
+      let m = substitute(msg, "[^[:print:]]", "", "g")
+      call appendbufline(s:capture_buf, "$", m)
     endif
 
     if s:parsing_disasm_msg
