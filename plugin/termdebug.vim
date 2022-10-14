@@ -487,7 +487,13 @@ func s:StartDebugCommon(dict)
 
   call s:InstallCommands()
   call win_gotoid(s:gdbwin)
-  exe "file Gdb terminal"
+
+  let name = "Gdb terminal"
+  let nr = bufnr(name)
+  if nr >= 0
+    exe "bwipe " . nr
+  endif
+  exe "file " . name
 
   " Contains breakpoints that have been placed, key is a string with the GDB
   " breakpoint number.
@@ -499,7 +505,13 @@ func s:StartDebugCommon(dict)
   augroup END
 
   call win_gotoid(s:ptywin)
-  exe "file Communication terminal"
+  " Change name of ptybuf
+  let name = "Communication terminal"
+  let nr = bufnr(name)
+  if nr >= 0
+    exe "bwipe " . nr
+  endif
+  exe "file " . name
   q "Close the command window
   call win_gotoid(s:gdbwin)
   startinsert
