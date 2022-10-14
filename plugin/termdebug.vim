@@ -1195,6 +1195,11 @@ func! s:GoToBreakpoint(id)
   endif
 
   let entry = s:breakpoints[a:id]
+  if has_key(entry, "pending")
+    echoerr "Cannot go to pending breakpoint " . a:id
+    return
+  endif
+
   let lnum = entry['lnum']
   let fname = entry['fname']
   call win_gotoid(s:sourcewin)
