@@ -1116,10 +1116,8 @@ func s:HandleCursor(msg)
   let wid = win_getid(winnr())
 
   if a:msg =~ '^\*stopped'
-    "call ch_log('program stopped')
     let s:stopped = 1
-  elseif a:msg =~ '^\*running'
-    "call ch_log('program running')
+  elseif a:msg =~ '^\*running,thread-id="all"'
     let s:stopped = 0
   endif
 
