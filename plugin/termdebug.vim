@@ -113,6 +113,27 @@ func TermDebugToggleMessages()
   endif
 endfunc
 
+func TermDebugBrToQf()
+  let items = map(items(s:breakpoints), {_, i -> {
+        \ "filename": i[1]['fname'],
+        \ "lnum": i[1]['lnum'],
+        \ "col": 1,
+        \ "text": "Breakpoint " . i[0]
+        \ } })
+  call setqflist([], ' ', {"title": "Breakpoints", "items": items})
+  copen
+endfunc
+
+func TermDebugQfToBr()
+	let items = getqflist()
+	for item in items
+		let fname = fnamemodify(bufname(item['bufnr']), ":p")
+		let lnum = item['lnum']
+		call TermDebugSendCommand("break " . fname . ":" . lnum)
+	endfor
+	cclose
+endfunc
+
 " Name of the gdb command, defaults to "gdb".
 if !exists('g:termdebugger')
   let g:termdebugger = 'gdb'
