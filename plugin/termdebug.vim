@@ -113,13 +113,35 @@ func TermDebugToggleMessages()
   endif
 endfunc
 
+func s:Compare(a, b)
+  let alen = len(a:a)
+  let blen = len(a:b)
+  if alen < blen
+    return -1
+  elseif blen < alen
+    return 1
+  elseif a:a < a:b
+    return -1
+  elseif a:b < a:a
+    return 1
+  else
+    return 0
+  endif
+endfunc
+
 func TermDebugBrToQf()
-  let items = map(items(s:breakpoints), {_, i -> {
+  let brs = sort(items(s:breakpoints), {a, b -> <SID>Compare(a[0], b[0])})
+  let brs = filter(brs, {_, p -> ! has_key(p[1], 'pending')})
+  let items = map(brs, {_, i -> {
         \ "filename": i[1]['fname'],
         \ "lnum": i[1]['lnum'],
         \ "col": 1,
         \ "text": "Breakpoint " . i[0]
         \ } })
+  if empty(items)
+    echoerr "No breakpoints to show"
+    return
+  endif
   call setqflist([], ' ', {"title": "Breakpoints", "items": items})
   copen
 endfunc
