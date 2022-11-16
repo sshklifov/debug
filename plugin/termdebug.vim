@@ -74,6 +74,13 @@ function! TermDebugIsOpen()
   return exists('s:gdbwin')
 endfunction
 
+function! TermDebugIsStopped()
+  if !exists("s:stopped")
+    return 1
+  endif
+  return s:stopped
+endfunction
+
 function! TermDebugGoToPC()
   for signsData in sign_getplaced()
     let signDebugPC = filter(signsData['signs'], {_, s -> s['name'] == "debugPC"})
@@ -92,7 +99,7 @@ func TermDebugSendCommand(cmd)
   if s:way == 'prompt'
     call chansend(s:gdbjob, a:cmd . "\n")
   else
-    if !s:stopped
+    if !TermDebugIsStopped()
       echoerr "Cannot send command '" . a:cmd . "'. Program is running."
       return
     endif
@@ -164,7 +171,6 @@ endif
 let s:pc_id = 12
 let s:asm_id = 13
 let s:break_id = 14  " breakpoint number is added to this
-let s:stopped = 1
 
 let s:parsing_disasm_msg = 0
 let s:asm_lines = []
@@ -705,6 +711,10 @@ endfunc
 func s:EndDebugCommon()
   let curwinid = win_getid(winnr())
 
+  if exists("s:stopped")
+    unlet s:stopped
+  endif
+
   if exists('s:ptybuf') && s:ptybuf
     exe 'bwipe! ' . s:ptybuf
   endif
@@ -1134,7 +1144,7 @@ func s:GotoAsmwinOrCreateIt()
   if s:asm_addr != ''
     let lnum = search('^' . s:asm_addr)
     if lnum == 0
-      if s:stopped
+      if TermDebugIsStopped()
         call s:SendCommand('disassemble $pc')
       endif
     else
@@ -1209,7 +1219,7 @@ func s:HandleCursor(msg)
       endif
       setlocal signcolumn=yes
     endif
-  elseif !s:stopped || fname != ''
+  elseif !TermDebugIsStopped() || fname != ''
     exe 'sign unplace ' . s:pc_id
   endif
 
