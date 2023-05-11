@@ -890,6 +890,7 @@ func s:DeleteCommands()
   delcommand Gdb
   delcommand Source
   delcommand Asm
+  delcommand Com
   delcommand Break
 
   exe 'sign unplace ' . s:pc_id
