@@ -180,28 +180,43 @@ func TermDebugStart()
     return
   endif
 
-  let s:pid = 0
-  let s:asmwin = 0
-
   if exists('#User#TermdebugStartPre')
     doauto <nomodeline> User TermdebugStartPre
   endif
 
-  " Uncomment this line to write logging in "debuglog".
-  " call ch_logfile('debuglog', 'w')
+  " Set the filetype, this can be used to add mappings.
+  set filetype=termdebug
 
-  let s:sourcewin = win_getid(winnr())
+  " Sign used to highlight the line where the program has stopped.
+  " There can be only one.
+  sign define debugPC linehl=debugPC
+
+  augroup TermDebug
+    au BufRead * call s:BufRead()
+    au OptionSet background call s:Highlight(0, v:option_old, v:option_new)
+  augroup END
 
   " Remember the old value of 'signcolumn' for each buffer that it's set in, so
   " that we can restore the value for all buffers.
   let b:save_signcolumn = &signcolumn
   let s:signcolumn_buflist = [bufnr()]
 
+  " Contains breakpoints that have been placed, key is a string with the GDB
+  " breakpoint number.
+  let s:breakpoints = {}
 
-  call s:StartDebug_term()
+  let s:pid = 0
+  let s:asmwin = 0
+  let s:sourcewin = win_getid(winnr())
+
+  call s:LaunchGdb()
+  call s:InstallCommands()
+
+  call win_gotoid(s:gdbwin)
+  startinsert
 endfunc
 
-func s:StartDebug_term()
+func s:LaunchGdb()
   let gdb_cmd = [g:termdebugger]
   " Add -quiet to avoid the intro message causing a hit-enter prompt.
   let gdb_cmd += ['-quiet']
@@ -215,7 +230,6 @@ func s:StartDebug_term()
   let gdb_cmd += ['-ex', 'echo startupdone\n']
 
   execute 'new'
-  " call ch_log('executing "' . join(gdb_cmd) . '"')
   let s:gdb_job_id = termopen(gdb_cmd, {
         \ 'on_exit': function('s:EndTermDebug'),
         \ 'on_stdout': function('s:GdbOutput')
@@ -231,38 +245,14 @@ func s:StartDebug_term()
   let s:gdbbuf = gdb_job_info['buffer']
   let s:gdbwin = win_getid(winnr())
 
-  " Set the filetype, this can be used to add mappings.
-  set filetype=termdebug
-
-  call s:StartDebugCommon()
-endfunc
-
-func s:StartDebugCommon()
-  " Sign used to highlight the line where the program has stopped.
-  " There can be only one.
-  sign define debugPC linehl=debugPC
-
-  call s:InstallCommands()
+  " Rename the Gdb buffer
   call win_gotoid(s:gdbwin)
-
   let name = "Gdb terminal"
   let nr = bufnr(name)
   if nr >= 0
     exe "bwipe " . nr
   endif
   exe "file " . name
-
-  " Contains breakpoints that have been placed, key is a string with the GDB
-  " breakpoint number.
-  let s:breakpoints = {}
-
-  augroup TermDebug
-    au BufRead * call s:BufRead()
-    au OptionSet background call s:Highlight(0, v:option_old, v:option_new)
-  augroup END
-
-  call win_gotoid(s:gdbwin)
-  startinsert
 endfunc
 
 " Send a command to gdb.  "cmd" is the string without line terminator.
