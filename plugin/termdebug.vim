@@ -203,20 +203,6 @@ func TermDebugStart()
   call s:StartDebug_term()
 endfunc
 
-" Use when debugger didn't start or ended.
-func s:CloseBuffers()
-  unlet! s:gdbwin
-endfunc
-
-func s:CheckGdbRunning()
-  if nvim_get_chan_info(s:gdb_job_id) == {}
-      echoerr string(g:termdebugger) . ' exited unexpectedly'
-      call s:CloseBuffers()
-      return ''
-  endif
-  return 'ok'
-endfunc
-
 func s:StartDebug_term()
   let gdb_cmd = [g:termdebugger]
   " Add -quiet to avoid the intro message causing a hit-enter prompt.
