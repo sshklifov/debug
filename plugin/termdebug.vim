@@ -201,10 +201,6 @@ func TermDebugStart()
   let s:allleft = 0
 
   call s:StartDebug_term()
-
-  if exists('#User#TermdebugStartPost')
-    doauto <nomodeline> User TermdebugStartPost
-  endif
 endfunc
 
 " Use when debugger didn't start or ended.
@@ -236,100 +232,20 @@ func s:StartDebug_term()
 
   execute 'new'
   " call ch_log('executing "' . join(gdb_cmd) . '"')
-  let s:gdb_job_id = termopen(gdb_cmd, {'on_exit': function('s:EndTermDebug')})
+  let s:gdb_job_id = termopen(gdb_cmd, {
+        \ 'on_exit': function('s:EndTermDebug'),
+        \ 'on_stdout': function('s:GdbOutput')
+        \ })
   if s:gdb_job_id == 0
     echoerr 'invalid argument (or job table is full) while opening gdb terminal window'
     return
   elseif s:gdb_job_id == -1
     echoerr 'Failed to open the gdb terminal window'
-    call s:CloseBuffers()
     return
   endif
   let gdb_job_info = nvim_get_chan_info(s:gdb_job_id)
   let s:gdbbuf = gdb_job_info['buffer']
   let s:gdbwin = win_getid(winnr())
-
-  " Create a hidden terminal window to communicate with gdb
-  let s:comm_job_id = jobstart('tail -f /dev/null;#gdb communication', {
-        \ 'on_stdout': function('s:CommOutput'),
-        \ 'pty': v:true,
-        \ })
-  " hide terminal buffer
-  if s:comm_job_id == 0
-    echoerr 'invalid argument (or job table is full) while opening communication terminal window'
-    return
-  elseif s:comm_job_id == -1
-    echoerr 'Failed to open the communication terminal window'
-    return
-  endif
-  let comm_job_info = nvim_get_chan_info(s:comm_job_id)
-  let commpty = comm_job_info['pty']
-
-  " Wait for the "startupdone" message before sending any commands.
-  let try_count = 0
-  while 1
-    if s:CheckGdbRunning() != 'ok'
-      return
-    endif
-
-    for lnum in range(1, 200)
-      if get(getbufline(s:gdbbuf, lnum), 0, '') =~ 'startupdone'
-        let try_count = 9999
-        break
-      endif
-    endfor
-    let try_count += 1
-    if try_count > 300
-      " done or give up after five seconds
-      break
-    endif
-    sleep 10m
-  endwhile
-
-  " Connect gdb to the communication pty, using the GDB/MI interface.
-  " Prefix "server" to avoid adding this to the history.
-  call chansend(s:gdb_job_id, 'server new-ui mi ' . commpty . "\r")
-
-  " Wait for the response to show up, users may not notice the error and wonder
-  " why the debugger doesn't work.
-  let try_count = 0
-  while 1
-    if s:CheckGdbRunning() != 'ok'
-      return
-    endif
-
-    let response = ''
-    for lnum in range(1, 200)
-      let line1 = get(getbufline(s:gdbbuf, lnum), 0, '')
-      let line2 = get(getbufline(s:gdbbuf, lnum + 1), 0, '')
-      if line1 =~ 'new-ui mi '
-        " response can be in the same line or the next line
-        let response = line1 . line2
-        if response =~ 'Undefined command'
-          echoerr 'Sorry, your gdb is too old, gdb 7.12 is required'
-          " CHECKME: possibly send a "server show version" here
-          call s:CloseBuffers()
-          return
-        endif
-        if response =~ 'New UI allocated'
-          " Success!
-          break
-        endif
-      elseif line1 =~ 'Reading symbols from' && line2 !~ 'new-ui mi '
-        " Reading symbols might take a while, try more times
-        let try_count -= 1
-      endif
-    endfor
-    if response =~ 'New UI allocated'
-      break
-    endif
-    let try_count += 1
-    if try_count > 100
-      echoerr 'Cannot check if your gdb works, continuing anyway'
-      break
-    endif
-    sleep 10m
-  endwhile
 
   " Set the filetype, this can be used to add mappings.
   set filetype=termdebug
@@ -527,6 +443,38 @@ func s:HandleDisasmMsg(msg)
       call add(s:asm_lines, value)
     endif
   endif
+endfunc
+
+func s:GdbOutput(job_id, msgs, event)
+  for msg in a:msgs
+    if msg =~ "startupdone"
+      " Create a hidden terminal window to communicate with gdb
+      let s:comm_job_id = jobstart('tail -f /dev/null;#gdb communication', {
+            \ 'on_stdout': function('s:CommOutput'),
+            \ 'pty': v:true,
+            \ })
+      " hide terminal buffer
+      if s:comm_job_id == 0
+        echoerr 'invalid argument (or job table is full) while opening communication terminal window'
+        return
+      elseif s:comm_job_id == -1
+        echoerr 'Failed to open the communication terminal window'
+        return
+      endif
+      let comm_job_info = nvim_get_chan_info(s:comm_job_id)
+      let commpty = comm_job_info['pty']
+
+      " Connect gdb to the communication pty, using the GDB/MI interface.
+      " Prefix "server" to avoid adding this to the history.
+      call chansend(a:job_id, 'server new-ui mi ' . commpty . "\r")
+    endif
+    if msg =~ 'New UI allocated'
+      if exists('#User#TermdebugStartPost')
+        doauto <nomodeline> User TermdebugStartPost
+      endif
+      " TODO
+    endif
+  endfor
 endfunc
 
 func s:CommOutput(job_id, msgs, event)
