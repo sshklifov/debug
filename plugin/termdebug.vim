@@ -50,11 +50,6 @@ endif
 let s:keepcpo = &cpo
 set cpo&vim
 
-" The command that starts debugging, e.g. ":Termdebug vim".
-" To end type "quit" in the gdb window.
-command -nargs=* -complete=file -bang Termdebug call s:StartDebug(<bang>0, <f-args>)
-command -nargs=+ -complete=file -bang TermdebugCommand call s:StartDebugCommand(<bang>0, <f-args>)
-
 function! TermDebugIsOpen()
   return exists('s:gdbwin')
 endfunction
@@ -175,17 +170,7 @@ call s:Highlight(1, '', &background)
 hi default debugBreakpoint gui=reverse guibg=red
 hi default debugBreakpointDisabled gui=reverse guibg=gray
 
-func s:StartDebug(bang, ...)
-  " First argument is the command to debug, second core file or process ID.
-  call s:StartDebug_internal({'gdb_args': a:000, 'bang': a:bang})
-endfunc
-
-func s:StartDebugCommand(bang, ...)
-  " First argument is the command to debug, rest are run arguments.
-  call s:StartDebug_internal({'gdb_args': [a:1], 'proc_args': a:000[1:], 'bang': a:bang})
-endfunc
-
-func s:StartDebug_internal(dict)
+func TermDebugStart()
   if exists('s:gdbwin')
     echoerr 'Terminal debugger already running, cannot run two'
     return
@@ -215,7 +200,7 @@ func s:StartDebug_internal(dict)
   let s:save_columns = 0
   let s:allleft = 0
 
-  call s:StartDebug_term(a:dict)
+  call s:StartDebug_term()
 
   if exists('g:termdebug_disasm_window')
     if g:termdebug_disasm_window
@@ -244,10 +229,7 @@ func s:CheckGdbRunning()
   return 'ok'
 endfunc
 
-func s:StartDebug_term(dict)
-  let gdb_args = get(a:dict, 'gdb_args', [])
-  let proc_args = get(a:dict, 'proc_args', [])
-
+func s:StartDebug_term()
   let gdb_cmd = [g:termdebugger]
   " Add -quiet to avoid the intro message causing a hit-enter prompt.
   let gdb_cmd += ['-quiet']
@@ -259,9 +241,6 @@ func s:StartDebug_term(dict)
   let gdb_cmd += ['-iex', 'set mi-async on']
   " Command executed _after_ startup is done, provides us with the necessary feedback
   let gdb_cmd += ['-ex', 'echo startupdone\n']
-
-  " Adding arguments requested by the user
-  let gdb_cmd += gdb_args
 
   execute 'new'
   " call ch_log('executing "' . join(gdb_cmd) . '"')
@@ -315,11 +294,6 @@ func s:StartDebug_term(dict)
     sleep 10m
   endwhile
 
-  " Set arguments to be run.
-  if len(proc_args)
-    call chansend(s:gdb_job_id, 'server set args ' . join(proc_args) . "\r")
-  endif
-
   " Connect gdb to the communication pty, using the GDB/MI interface.
   " Prefix "server" to avoid adding this to the history.
   call chansend(s:gdb_job_id, 'server new-ui mi ' . commpty . "\r")
@@ -368,10 +342,10 @@ func s:StartDebug_term(dict)
   " Set the filetype, this can be used to add mappings.
   set filetype=termdebug
 
-  call s:StartDebugCommon(a:dict)
+  call s:StartDebugCommon()
 endfunc
 
-func s:StartDebugCommon(dict)
+func s:StartDebugCommon()
   " Sign used to highlight the line where the program has stopped.
   " There can be only one.
   sign define debugPC linehl=debugPC
