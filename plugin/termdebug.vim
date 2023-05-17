@@ -516,13 +516,6 @@ func s:DeleteCommands()
   unlet s:breakpoints
 endfunc
 
-func s:Run(args)
-  if a:args != ''
-    call s:SendCommand('-exec-arguments ' . a:args)
-  endif
-  call s:SendCommand('-exec-run')
-endfunc
-
 func s:SendEval(expr)
   " check for "likely" boolean expressions, in which case we take it as lhs
   if a:expr =~ "[=!<>]="
