@@ -245,22 +245,6 @@ func s:CheckGdbRunning()
 endfunc
 
 func s:StartDebug_term(dict)
-  " Create a hidden terminal window to communicate with gdb
-  let s:comm_job_id = jobstart('tail -f /dev/null;#gdb communication', {
-        \ 'on_stdout': function('s:CommOutput'),
-        \ 'pty': v:true,
-        \ })
-  " hide terminal buffer
-  if s:comm_job_id == 0
-    echoerr 'invalid argument (or job table is full) while opening communication terminal window'
-    return
-  elseif s:comm_job_id == -1
-    echoerr 'Failed to open the communication terminal window'
-    return
-  endif
-  let comm_job_info = nvim_get_chan_info(s:comm_job_id)
-  let commpty = comm_job_info['pty']
-
   let gdb_args = get(a:dict, 'gdb_args', [])
   let proc_args = get(a:dict, 'proc_args', [])
 
@@ -293,6 +277,22 @@ func s:StartDebug_term(dict)
   let gdb_job_info = nvim_get_chan_info(s:gdb_job_id)
   let s:gdbbuf = gdb_job_info['buffer']
   let s:gdbwin = win_getid(winnr())
+
+  " Create a hidden terminal window to communicate with gdb
+  let s:comm_job_id = jobstart('tail -f /dev/null;#gdb communication', {
+        \ 'on_stdout': function('s:CommOutput'),
+        \ 'pty': v:true,
+        \ })
+  " hide terminal buffer
+  if s:comm_job_id == 0
+    echoerr 'invalid argument (or job table is full) while opening communication terminal window'
+    return
+  elseif s:comm_job_id == -1
+    echoerr 'Failed to open the communication terminal window'
+    return
+  endif
+  let comm_job_info = nvim_get_chan_info(s:comm_job_id)
+  let commpty = comm_job_info['pty']
 
   " Wait for the "startupdone" message before sending any commands.
   let try_count = 0
