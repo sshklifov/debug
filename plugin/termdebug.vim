@@ -171,6 +171,14 @@ hi default debugBreakpoint gui=reverse guibg=red
 hi default debugBreakpointDisabled gui=reverse guibg=gray
 
 func TermDebugStart()
+  call s:TermDebugStartCommon({})
+endfunc
+
+func TermDebugStartSSH(ssh)
+  call s:TermDebugStartCommon({'ssh': a:ssh})
+endfunc
+
+func s:TermDebugStartCommon(opts)
   if exists('s:gdbwin')
     echoerr 'Terminal debugger already running, cannot run two'
     return
@@ -183,9 +191,6 @@ func TermDebugStart()
   if exists('#User#TermdebugStartPre')
     doauto <nomodeline> User TermdebugStartPre
   endif
-
-  " Set the filetype, this can be used to add mappings.
-  set filetype=termdebug
 
   " Sign used to highlight the line where the program has stopped.
   " There can be only one.
@@ -209,10 +214,13 @@ func TermDebugStart()
   let s:asmwin = 0
   let s:sourcewin = win_getid(winnr())
 
+  let s:gdb_startup_state = a:opts
   call s:LaunchGdb()
   call s:InstallCommands()
 
   call win_gotoid(s:gdbwin)
+  " Set the filetype, this can be used to add mappings.
+  set filetype=termdebug
   startinsert
 endfunc
 
@@ -221,13 +229,17 @@ func s:LaunchGdb()
   " Add -quiet to avoid the intro message causing a hit-enter prompt.
   let gdb_cmd += ['-quiet']
   " Disable pagination, it causes everything to stop at the gdb
-  let gdb_cmd += ['-iex', 'set pagination off']
+  let gdb_cmd += ['-iex', '"set pagination off"']
   " Interpret commands while the target is running.  This should usually only
   " be exec-interrupt, since many commands don't work properly while the
   " target is running (so execute during startup).
-  let gdb_cmd += ['-iex', 'set mi-async on']
+  let gdb_cmd += ['-iex', '"set mi-async on"']
   " Command executed _after_ startup is done, provides us with the necessary feedback
-  let gdb_cmd += ['-ex', 'echo startupdone\n']
+  let gdb_cmd += ['-ex', '"echo startupdone\n"']
+  " Launch GDB through ssh
+  if has_key(s:gdb_startup_state, "ssh")
+    let gdb_cmd = ['ssh', '-t', s:gdb_startup_state['ssh'], join(gdb_cmd, " ")]
+  endif
 
   execute 'new'
   let s:gdb_job_id = termopen(gdb_cmd, {
@@ -308,6 +320,7 @@ function s:EndTermDebug(job_id, exit_code, event)
     doauto <nomodeline> User TermdebugStopPre
   endif
 
+  unlet s:gdb_startup_state
   unlet s:gdbwin
 
   call s:EndDebugCommon()
@@ -418,15 +431,19 @@ endfunc
 func s:GdbOutput(job_id, msgs, event)
   for msg in a:msgs
     if msg =~ "startupdone"
-      " If this variable exists, we don't know the tty of the communication job yet. mi interface
-      " has not yet been set up.
-      let s:gdb_missing_mi = 1
+      " If this key exists, we don't know the tty of the communication job yet.
+      " MI interface has not yet been set up.
+      let s:gdb_startup_state['missing_mi'] = 1
+
       " Create a hidden terminal window to communicate with gdb
-      let s:comm_job_id = jobstart('tty; tail -f /dev/null', {
+      let comm_cmd = "tty; tail -f /dev/null"
+      if has_key(s:gdb_startup_state, "ssh")
+        let comm_cmd = 'ssh -t ' . s:gdb_startup_state['ssh'] . ' "' . comm_cmd . '"'
+      endif
+      let s:comm_job_id = jobstart(comm_cmd, {
             \ 'on_stdout': function('s:CommOutput'),
             \ 'pty': v:true,
             \ })
-      " hide terminal buffer
       if s:comm_job_id == 0
         echoerr 'invalid argument (or job table is full) while opening communication terminal window'
         return
@@ -456,12 +473,12 @@ func s:CommOutput(job_id, msgs, event)
       call appendbufline(s:capture_buf, "$", m)
     endif
 
-    if exists("s:gdb_missing_mi")
+    if has_key(s:gdb_startup_state, "missing_mi")
       " Capture device name of communication terminal.
       " The first command executed in the terminal will be "tty" and the output will be parsed here.
       let pty = s:MatchGetCapture(msg, '\(' . '/dev/pts/[0-9]\+' . '\)')
       if pty != ""
-        unlet s:gdb_missing_mi
+        unlet s:gdb_startup_state["missing_mi"]
         " Connect gdb to the communication pty, using the GDB/MI interface.
         " Prefix "server" to avoid adding this to the history.
         call chansend(s:gdb_job_id, 'server new-ui mi ' . pty . "\r")
