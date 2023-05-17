@@ -195,7 +195,6 @@ func s:StartDebug_internal(dict)
     return
   endif
 
-  let s:ptywin = 0
   let s:pid = 0
   let s:asmwin = 0
 
@@ -233,7 +232,6 @@ endfunc
 
 " Use when debugger didn't start or ended.
 func s:CloseBuffers()
-  exe 'bwipe! ' . s:ptybuf
   unlet! s:gdbwin
 endfunc
 
@@ -247,21 +245,6 @@ func s:CheckGdbRunning()
 endfunc
 
 func s:StartDebug_term(dict)
-  " Open a terminal window without a job, to run the debugged program in.
-  execute 'new'
-  let s:pty_job_id = termopen('tail -f /dev/null')
-  if s:pty_job_id == 0
-    echoerr 'invalid argument (or job table is full) while opening terminal window'
-    return
-  elseif s:pty_job_id == -1
-    echoerr 'Failed to open the program terminal window'
-    return
-  endif
-  let pty_job_info = nvim_get_chan_info(s:pty_job_id)
-  let s:ptybuf = pty_job_info['buffer']
-  let pty = pty_job_info['pty']
-  let s:ptywin = win_getid(winnr())
-
   " Create a hidden terminal window to communicate with gdb
   let s:comm_job_id = jobstart('tail -f /dev/null;#gdb communication', {
         \ 'on_stdout': function('s:CommOutput'),
@@ -270,11 +253,9 @@ func s:StartDebug_term(dict)
   " hide terminal buffer
   if s:comm_job_id == 0
     echoerr 'invalid argument (or job table is full) while opening communication terminal window'
-    exe 'bwipe! ' . s:ptybuf
     return
   elseif s:comm_job_id == -1
     echoerr 'Failed to open the communication terminal window'
-    exe 'bwipe! ' . s:ptybuf
     return
   endif
   let comm_job_info = nvim_get_chan_info(s:comm_job_id)
@@ -292,8 +273,6 @@ func s:StartDebug_term(dict)
   " be exec-interrupt, since many commands don't work properly while the
   " target is running (so execute during startup).
   let gdb_cmd += ['-iex', 'set mi-async on']
-  " Open a terminal window to run the debugger.
-  let gdb_cmd += ['-tty', pty]
   " Command executed _after_ startup is done, provides us with the necessary feedback
   let gdb_cmd += ['-ex', 'echo startupdone\n']
 
@@ -305,7 +284,6 @@ func s:StartDebug_term(dict)
   let s:gdb_job_id = termopen(gdb_cmd, {'on_exit': function('s:EndTermDebug')})
   if s:gdb_job_id == 0
     echoerr 'invalid argument (or job table is full) while opening gdb terminal window'
-    exe 'bwipe! ' . s:ptybuf
     return
   elseif s:gdb_job_id == -1
     echoerr 'Failed to open the gdb terminal window'
@@ -417,15 +395,6 @@ func s:StartDebugCommon(dict)
     au OptionSet background call s:Highlight(0, v:option_old, v:option_new)
   augroup END
 
-  call win_gotoid(s:ptywin)
-  " Change name of ptybuf
-  let name = "Communication terminal"
-  let nr = bufnr(name)
-  if nr >= 0
-    exe "bwipe " . nr
-  endif
-  exe "file " . name
-  q "Close the command window
   call win_gotoid(s:gdbwin)
   startinsert
 endfunc
@@ -493,10 +462,6 @@ func s:EndDebugCommon()
 
   if exists("s:stopped")
     unlet s:stopped
-  endif
-
-  if exists('s:ptybuf') && s:ptybuf
-    exe 'bwipe! ' . s:ptybuf
   endif
 
   if exists('s:gdbbuf') && s:gdbbuf
@@ -642,7 +607,6 @@ func s:InstallCommands()
   command! Gdb call s:GotoGdbwinOrCreateIt()
   command! Source call s:GotoSourcewinOrCreateIt()
   command! Asm call s:GotoAsmwinOrCreateIt()
-  command! Com call s:GotoComwinOrCreateIt()
   command! -nargs=1 Break call s:GoToBreakpoint(<f-args>)
 
   let &cpo = save_cpo
@@ -653,7 +617,6 @@ func s:DeleteCommands()
   delcommand Gdb
   delcommand Source
   delcommand Asm
-  delcommand Com
   delcommand Break
 
   exe 'sign unplace ' . s:pc_id
@@ -916,14 +879,6 @@ func s:GotoAsmwinOrCreateIt()
       exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
       exe 'normal ' . lnum . 'z.'
     endif
-  endif
-endfunc
-
-func s:GotoComwinOrCreateIt()
-  if !win_gotoid(s:ptywin)
-    tabnew
-    let s:ptywin = win_getid(winnr())
-    exe "b " . s:ptybuf
   endif
 endfunc
 
