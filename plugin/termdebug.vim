@@ -197,7 +197,6 @@ func TermDebugStart()
   let b:save_signcolumn = &signcolumn
   let s:signcolumn_buflist = [bufnr()]
 
-  let s:allleft = 0
 
   call s:StartDebug_term()
 endfunc
