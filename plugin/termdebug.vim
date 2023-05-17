@@ -418,8 +418,11 @@ endfunc
 func s:GdbOutput(job_id, msgs, event)
   for msg in a:msgs
     if msg =~ "startupdone"
+      " If this variable exists, we don't know the tty of the communication job yet. mi interface
+      " has not yet been set up.
+      let s:gdb_missing_mi = 1
       " Create a hidden terminal window to communicate with gdb
-      let s:comm_job_id = jobstart('tail -f /dev/null;#gdb communication', {
+      let s:comm_job_id = jobstart('tty; tail -f /dev/null', {
             \ 'on_stdout': function('s:CommOutput'),
             \ 'pty': v:true,
             \ })
@@ -431,18 +434,12 @@ func s:GdbOutput(job_id, msgs, event)
         echoerr 'Failed to open the communication terminal window'
         return
       endif
-      let comm_job_info = nvim_get_chan_info(s:comm_job_id)
-      let commpty = comm_job_info['pty']
-
-      " Connect gdb to the communication pty, using the GDB/MI interface.
-      " Prefix "server" to avoid adding this to the history.
-      call chansend(a:job_id, 'server new-ui mi ' . commpty . "\r")
     endif
+
     if msg =~ 'New UI allocated'
       if exists('#User#TermdebugStartPost')
         doauto <nomodeline> User TermdebugStartPost
       endif
-      " TODO
     endif
   endfor
 endfunc
@@ -453,12 +450,23 @@ func s:CommOutput(job_id, msgs, event)
     if msg[0] == "\n"
       let msg = msg[1:]
     endif
+
     if exists("s:capture_buf")
       let m = substitute(msg, "[^[:print:]]", "", "g")
       call appendbufline(s:capture_buf, "$", m)
     endif
 
-    if s:parsing_disasm_msg
+    if exists("s:gdb_missing_mi")
+      " Capture device name of communication terminal.
+      " The first command executed in the terminal will be "tty" and the output will be parsed here.
+      let pty = s:MatchGetCapture(msg, '\(' . '/dev/pts/[0-9]\+' . '\)')
+      if pty != ""
+        unlet s:gdb_missing_mi
+        " Connect gdb to the communication pty, using the GDB/MI interface.
+        " Prefix "server" to avoid adding this to the history.
+        call chansend(s:gdb_job_id, 'server new-ui mi ' . pty . "\r")
+      endif
+    elseif s:parsing_disasm_msg
       call s:HandleDisasmMsg(msg)
     elseif msg != ''
       if msg =~ '^\(\*stopped\|\*running\|=thread-selected\)'
