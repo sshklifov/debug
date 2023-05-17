@@ -202,14 +202,6 @@ func TermDebugStart()
 
   call s:StartDebug_term()
 
-  if exists('g:termdebug_disasm_window')
-    if g:termdebug_disasm_window
-      let curwinid = win_getid(winnr())
-      call s:GotoAsmwinOrCreateIt()
-      call win_gotoid(curwinid)
-    endif
-  endif
-
   if exists('#User#TermdebugStartPost')
     doauto <nomodeline> User TermdebugStartPost
   endif
@@ -833,12 +825,6 @@ func s:GotoAsmwinOrCreateIt()
       exe 'buffer' . asmbuf
     else
       exe 'file Termdebug-asm-listing'
-    endif
-
-    if exists('g:termdebug_disasm_window')
-      if g:termdebug_disasm_window > 1
-        exe 'resize ' . g:termdebug_disasm_window
-      endif
     endif
   endif
 
