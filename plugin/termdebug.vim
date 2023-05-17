@@ -197,7 +197,6 @@ func TermDebugStart()
   let b:save_signcolumn = &signcolumn
   let s:signcolumn_buflist = [bufnr()]
 
-  let s:save_columns = 0
   let s:allleft = 0
 
   call s:StartDebug_term()
@@ -358,10 +357,6 @@ func s:EndDebugCommon()
   call s:DeleteCommands()
 
   call win_gotoid(curwinid)
-
-  if s:save_columns > 0
-    let &columns = s:save_columns
-  endif
 
   if exists('#User#TermdebugStopPost')
     doauto <nomodeline> User TermdebugStopPost
