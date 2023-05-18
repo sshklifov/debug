@@ -156,8 +156,6 @@ let s:break_id = 14  " breakpoint number is added to this
 let s:parsing_disasm_msg = 0
 let s:asm_lines = []
 let s:asm_addr = ''
-
-let s:ignoreEvalError = 0
 "}}}
 
 """""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""{{{
@@ -473,23 +471,6 @@ func s:GetAsmAddr(msg)
   return addr
 endfunc
 
-func s:SendEval(expr)
-  " check for "likely" boolean expressions, in which case we take it as lhs
-  if a:expr =~ "[=!<>]="
-    let exprLHS = a:expr
-  else
-    " remove text that is likely an assignment
-    let exprLHS = substitute(a:expr, ' *=.*', '', '')
-  endif
-
-  " encoding expression to prevent bad errors
-  let expr = a:expr
-  let expr = substitute(expr, '\\', '\\\\', 'g')
-  let expr = substitute(expr, '"', '\\"', 'g')
-  call s:SendCommand('-data-evaluate-expression "' . expr . '"')
-  let s:evalexpr = exprLHS
-endfunc
-
 " Send a command to gdb.  "cmd" is the string without line terminator.
 func s:SendCommand(cmd)
   call chansend(s:comm_job_id, a:cmd . "\r")
@@ -719,29 +700,8 @@ func s:HandleProgramRun(msg)
   let s:pid = nr
 endfunc
 
-" Handle the result of data-evaluate-expression
-func s:HandleEvaluate(msg)
-  let value = substitute(a:msg, '.*value="\(.*\)"', '\1', '')
-  let value = substitute(value, '\\"', '"', 'g')
-  " multi-byte characters arrive in octal form
-  let value = substitute(value, '\\\o\o\o', {-> eval('"' .. submatch(0) .. '"')}, 'g')
-  let value = substitute(value, '', '\1', '')
-  echomsg '"' . s:evalexpr . '": ' . value
-
-  if s:evalexpr[0] != '*' && value =~ '^0x' && value != '0x0' && value !~ '"$'
-    " Looks like a pointer, also display what it points to.
-    let s:ignoreEvalError = 1
-    call s:SendEval('*' . s:evalexpr)
-  endif
-endfunc
-
 " Handle an error.
 func s:HandleError(msg)
-  if s:ignoreEvalError
-    " Result of s:SendEval() failed, ignore.
-    let s:ignoreEvalError = 0
-    return
-  endif
   let msgVal = s:MatchGetCapture(a:msg, 'msg="\([^"]*\)"')
   echoerr substitute(msgVal, '\\"', '"', 'g')
 endfunc
