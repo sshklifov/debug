@@ -47,9 +47,16 @@ if exists(':Termdebug')
   finish
 endif
 
+" Name of the gdb command, defaults to "gdb".
+if !exists('g:termdebugger')
+  let g:termdebugger = 'gdb'
+endif
+
 let s:keepcpo = &cpo
 set cpo&vim
 
+"""""""""""""""""""""""""""""""Global functions"""""""""""""""""""""""""""""""{{{
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 function! TermDebugIsOpen()
   return exists('s:gdbwin')
 endfunction
@@ -138,12 +145,10 @@ func TermDebugQfToBr()
 	endfor
 	cclose
 endfunc
+" }}}
 
-" Name of the gdb command, defaults to "gdb".
-if !exists('g:termdebugger')
-  let g:termdebugger = 'gdb'
-endif
-
+"""""""""""""""""""""""""""""""Variables to remove"""""""""""""""""""""""""""""""{{{
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 let s:pc_id = 12
 let s:asm_id = 13
 let s:break_id = 14  " breakpoint number is added to this
@@ -152,24 +157,11 @@ let s:parsing_disasm_msg = 0
 let s:asm_lines = []
 let s:asm_addr = ''
 
-" Take a breakpoint number as used by GDB and turn it into an integer.
-func s:Breakpoint2SignNumber(id)
-  return s:break_id + a:id
-endfunction
+let s:ignoreEvalError = 0
+"}}}
 
-func s:Highlight(init, old, new)
-  let default = a:init ? 'default ' : ''
-  if a:new ==# 'light' && a:old !=# 'light'
-    exe "hi " . default . "debugPC term=reverse ctermbg=lightblue guibg=lightblue"
-  elseif a:new ==# 'dark' && a:old !=# 'dark'
-    exe "hi " . default . "debugPC term=reverse ctermbg=darkblue guibg=darkblue"
-  endif
-endfunc
-
-call s:Highlight(1, '', &background)
-hi default debugBreakpoint gui=reverse guibg=red
-hi default debugBreakpointDisabled gui=reverse guibg=gray
-
+"""""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""{{{
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 func TermDebugStart()
   call s:TermDebugStartCommon({})
 endfunc
@@ -267,167 +259,6 @@ func s:LaunchGdb()
   exe "file " . name
 endfunc
 
-" Send a command to gdb.  "cmd" is the string without line terminator.
-func s:SendCommand(cmd)
-  "call ch_log('sending to gdb: ' . a:cmd)
-  call chansend(s:comm_job_id, a:cmd . "\r")
-endfunc
-
-" Decode a message from gdb.  quotedText starts with a ", return the text up
-" to the next ", unescaping characters:
-" - remove line breaks
-" - change \\t to \t
-" - change \0xhh to \xhh
-" - change \ooo to octal
-" - change \\ to \
-func s:DecodeMessage(quotedText)
-  if a:quotedText[0] != '"'
-    echoerr 'DecodeMessage(): missing quote in ' . a:quotedText
-    return
-  endif
-  return a:quotedText
-        \->substitute('^"\|".*\|\\n', '', 'g')
-        \->substitute('\\t', "\t", 'g')
-        \->substitute('\\0x\(\x\x\)', {-> eval('"\x' .. submatch(1) .. '"')}, 'g')
-        \->substitute('\\\o\o\o', {-> eval('"' .. submatch(0) .. '"')}, 'g')
-        \->substitute('\\\\', '\', 'g')
-endfunc
-
-" Extract the "name" value from a gdb message with fullname="name".
-func s:GetFullname(msg)
-  if a:msg !~ 'fullname'
-    return ''
-  endif
-  let name = s:DecodeMessage(substitute(a:msg, '.*fullname=', '', ''))
-  if has('win32') && name =~ ':\\\\'
-    " sometimes the name arrives double-escaped
-    let name = substitute(name, '\\\\', '\\', 'g')
-  endif
-  return name
-endfunc
-
-" Extract the "addr" value from a gdb message with addr="0x0001234".
-func s:GetAsmAddr(msg)
-  if a:msg !~ 'addr='
-    return ''
-  endif
-  let addr = s:DecodeMessage(substitute(a:msg, '.*addr=', '', ''))
-  return addr
-endfunc
-
-function s:EndTermDebug(job_id, exit_code, event)
-  if exists('#User#TermdebugStopPre')
-    doauto <nomodeline> User TermdebugStopPre
-  endif
-
-  unlet s:gdb_startup_state
-  unlet s:gdbwin
-
-  call s:EndDebugCommon()
-endfunc
-
-func s:EndDebugCommon()
-  let curwinid = win_getid(winnr())
-
-  if exists("s:stopped")
-    unlet s:stopped
-  endif
-
-  if exists('s:gdbbuf') && s:gdbbuf
-    exe 'bwipe! ' . s:gdbbuf
-  endif
-
-  let asmbuf = bufnr('Termdebug-asm-listing')
-  if asmbuf > 0
-    exe 'bwipe! ' . asmbuf
-  endif
-
-  " Restore 'signcolumn' in all buffers for which it was set.
-  call win_gotoid(s:sourcewin)
-  let was_buf = bufnr()
-  for bufnr in s:signcolumn_buflist
-    if bufexists(bufnr)
-      exe bufnr .. "buf"
-      if exists('b:save_signcolumn')
-        let &signcolumn = b:save_signcolumn
-        unlet b:save_signcolumn
-      endif
-    endif
-  endfor
-  exe was_buf .. "buf"
-
-  call s:DeleteCommands()
-
-  call win_gotoid(curwinid)
-
-  if exists('#User#TermdebugStopPost')
-    doauto <nomodeline> User TermdebugStopPost
-  endif
-
-  au! TermDebug
-endfunc
-
-" - CommOutput: disassemble $pc
-" - CommOutput: &"disassemble $pc\n"
-" - CommOutput: ~"Dump of assembler code for function main(int, char**):\n"
-" - CommOutput: ~"   0x0000555556466f69 <+0>:\tpush   rbp\n"
-" ...
-" - CommOutput: ~"   0x0000555556467cd0:\tpop    rbp\n"
-" - CommOutput: ~"   0x0000555556467cd1:\tret    \n"
-" - CommOutput: ~"End of assembler dump.\n"
-" - CommOutput: ^done
-
-" - CommOutput: disassemble $pc
-" - CommOutput: &"disassemble $pc\n"
-" - CommOutput: &"No function contains specified address.\n"
-" - CommOutput: ^error,msg="No function contains specified address."
-func s:HandleDisasmMsg(msg)
-  if a:msg =~ '^\^done'
-    let curwinid = win_getid(winnr())
-    if win_gotoid(s:asmwin)
-      silent normal! gg0"_dG
-      call setline(1, s:asm_lines)
-      set nomodified
-      set filetype=asm
-
-      let lnum = search('^' . s:asm_addr)
-      if lnum != 0
-        exe 'sign unplace ' . s:asm_id
-        exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
-        exe 'normal ' . lnum . 'z.'
-      endif
-
-      call win_gotoid(curwinid)
-    endif
-
-    let s:parsing_disasm_msg = 0
-    let s:asm_lines = []
-  elseif a:msg =~ '^\^error,msg='
-    if s:parsing_disasm_msg == 1
-      " Disassemble call ran into an error. This can happen when gdb can't
-      " find the function frame address, so let's try to disassemble starting
-      " at current PC
-      call s:SendCommand('disassemble $pc,+100')
-    endif
-    let s:parsing_disasm_msg = 0
-  elseif a:msg =~ '\&\"disassemble \$pc'
-    if a:msg =~ '+100'
-      " This is our second disasm attempt
-      let s:parsing_disasm_msg = 2
-    endif
-  else
-    let value = substitute(a:msg, '^\~\"[ ]*', '', '')
-    let value = substitute(value, '^=>[ ]*', '', '')
-    let value = substitute(value, '\\n\"\r$', '', '')
-    let value = substitute(value, '\r', '', '')
-    let value = substitute(value, '\\t', ' ', 'g')
-
-    if value != '' || !empty(s:asm_lines)
-      call add(s:asm_lines, value)
-    endif
-  endif
-endfunc
-
 func s:GdbOutput(job_id, msgs, event)
   for msg in a:msgs
     if msg =~ "startupdone"
@@ -520,6 +351,61 @@ func s:InstallCommands()
 
   let &cpo = save_cpo
 endfunc
+" }}}
+
+"""""""""""""""""""""""""""""""Ending the session"""""""""""""""""""""""""""""""{{{
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+function s:EndTermDebug(job_id, exit_code, event)
+  if exists('#User#TermdebugStopPre')
+    doauto <nomodeline> User TermdebugStopPre
+  endif
+
+  unlet s:gdb_startup_state
+  unlet s:gdbwin
+
+  call s:EndDebugCommon()
+endfunc
+
+func s:EndDebugCommon()
+  let curwinid = win_getid(winnr())
+
+  if exists("s:stopped")
+    unlet s:stopped
+  endif
+
+  if exists('s:gdbbuf') && s:gdbbuf
+    exe 'bwipe! ' . s:gdbbuf
+  endif
+
+  let asmbuf = bufnr('Termdebug-asm-listing')
+  if asmbuf > 0
+    exe 'bwipe! ' . asmbuf
+  endif
+
+  " Restore 'signcolumn' in all buffers for which it was set.
+  call win_gotoid(s:sourcewin)
+  let was_buf = bufnr()
+  for bufnr in s:signcolumn_buflist
+    if bufexists(bufnr)
+      exe bufnr .. "buf"
+      if exists('b:save_signcolumn')
+        let &signcolumn = b:save_signcolumn
+        unlet b:save_signcolumn
+      endif
+    endif
+  endfor
+  exe was_buf .. "buf"
+
+  call s:DeleteCommands()
+
+  call win_gotoid(curwinid)
+
+  if exists('#User#TermdebugStopPost')
+    doauto <nomodeline> User TermdebugStopPost
+  endif
+
+  au! TermDebug
+endfunc
 
 " Delete installed debugger commands in the current window.
 func s:DeleteCommands()
@@ -540,6 +426,52 @@ func s:DeleteCommands()
 
   unlet s:breakpoints
 endfunc
+" }}}
+
+"""""""""""""""""""""""""""""""Message handlers"""""""""""""""""""""""""""""""{{{
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+" Decode a message from gdb.  quotedText starts with a ", return the text up
+" to the next ", unescaping characters:
+" - remove line breaks
+" - change \\t to \t
+" - change \0xhh to \xhh
+" - change \ooo to octal
+" - change \\ to \
+func s:DecodeMessage(quotedText)
+  if a:quotedText[0] != '"'
+    echoerr 'DecodeMessage(): missing quote in ' . a:quotedText
+    return
+  endif
+  return a:quotedText
+        \->substitute('^"\|".*\|\\n', '', 'g')
+        \->substitute('\\t', "\t", 'g')
+        \->substitute('\\0x\(\x\x\)', {-> eval('"\x' .. submatch(1) .. '"')}, 'g')
+        \->substitute('\\\o\o\o', {-> eval('"' .. submatch(0) .. '"')}, 'g')
+        \->substitute('\\\\', '\', 'g')
+endfunc
+
+" Extract the "name" value from a gdb message with fullname="name".
+func s:GetFullname(msg)
+  if a:msg !~ 'fullname'
+    return ''
+  endif
+  let name = s:DecodeMessage(substitute(a:msg, '.*fullname=', '', ''))
+  if has('win32') && name =~ ':\\\\'
+    " sometimes the name arrives double-escaped
+    let name = substitute(name, '\\\\', '\\', 'g')
+  endif
+  return name
+endfunc
+
+" Extract the "addr" value from a gdb message with addr="0x0001234".
+func s:GetAsmAddr(msg)
+  if a:msg !~ 'addr='
+    return ''
+  endif
+  let addr = s:DecodeMessage(substitute(a:msg, '.*addr=', '', ''))
+  return addr
+endfunc
 
 func s:SendEval(expr)
   " check for "likely" boolean expressions, in which case we take it as lhs
@@ -558,85 +490,68 @@ func s:SendEval(expr)
   let s:evalexpr = exprLHS
 endfunc
 
-let s:ignoreEvalError = 0
-
-" Handle the result of data-evaluate-expression
-func s:HandleEvaluate(msg)
-  let value = substitute(a:msg, '.*value="\(.*\)"', '\1', '')
-  let value = substitute(value, '\\"', '"', 'g')
-  " multi-byte characters arrive in octal form
-  let value = substitute(value, '\\\o\o\o', {-> eval('"' .. submatch(0) .. '"')}, 'g')
-  let value = substitute(value, '', '\1', '')
-  echomsg '"' . s:evalexpr . '": ' . value
-
-  if s:evalexpr[0] != '*' && value =~ '^0x' && value != '0x0' && value !~ '"$'
-    " Looks like a pointer, also display what it points to.
-    let s:ignoreEvalError = 1
-    call s:SendEval('*' . s:evalexpr)
-  endif
+" Send a command to gdb.  "cmd" is the string without line terminator.
+func s:SendCommand(cmd)
+  call chansend(s:comm_job_id, a:cmd . "\r")
 endfunc
 
-" Handle an error.
-func s:HandleError(msg)
-  if s:ignoreEvalError
-    " Result of s:SendEval() failed, ignore.
-    let s:ignoreEvalError = 0
-    return
-  endif
-  let msgVal = s:MatchGetCapture(a:msg, 'msg="\([^"]*\)"')
-  echoerr substitute(msgVal, '\\"', '"', 'g')
-endfunc
+" - CommOutput: disassemble $pc
+" - CommOutput: &"disassemble $pc\n"
+" - CommOutput: ~"Dump of assembler code for function main(int, char**):\n"
+" - CommOutput: ~"   0x0000555556466f69 <+0>:\tpush   rbp\n"
+" ...
+" - CommOutput: ~"   0x0000555556467cd0:\tpop    rbp\n"
+" - CommOutput: ~"   0x0000555556467cd1:\tret    \n"
+" - CommOutput: ~"End of assembler dump.\n"
+" - CommOutput: ^done
 
-func s:GotoSourcewinOrCreateIt()
-  if !win_gotoid(s:sourcewin)
-    below new
-    let s:sourcewin = win_getid(winnr())
-    call TermDebugGoToPC()
-  endif
-endfunc
+" - CommOutput: disassemble $pc
+" - CommOutput: &"disassemble $pc\n"
+" - CommOutput: &"No function contains specified address.\n"
+" - CommOutput: ^error,msg="No function contains specified address."
+func s:HandleDisasmMsg(msg)
+  if a:msg =~ '^\^done'
+    let curwinid = win_getid(winnr())
+    if win_gotoid(s:asmwin)
+      silent normal! gg0"_dG
+      call setline(1, s:asm_lines)
+      set nomodified
+      set filetype=asm
 
-func s:GotoGdbwinOrCreateIt()
-  if !win_gotoid(s:gdbwin)
-    above new
-    let s:gdbwin = win_getid(winnr())
-    exe "b " . s:gdbbuf
-  endif
-endfunc
-
-func s:GotoAsmwinOrCreateIt()
-  if !win_gotoid(s:asmwin)
-    if win_gotoid(s:sourcewin)
-      exe 'rightbelow new'
-    else
-      exe 'new'
-    endif
-
-    let s:asmwin = win_getid(winnr())
-
-    setlocal nowrap
-    setlocal number
-    setlocal noswapfile
-    setlocal buftype=nofile
-    setlocal modifiable
-
-    let asmbuf = bufnr('Termdebug-asm-listing')
-    if asmbuf > 0
-      exe 'buffer' . asmbuf
-    else
-      exe 'file Termdebug-asm-listing'
-    endif
-  endif
-
-  if s:asm_addr != ''
-    let lnum = search('^' . s:asm_addr)
-    if lnum == 0
-      if TermDebugIsStopped()
-        call s:SendCommand('disassemble $pc')
+      let lnum = search('^' . s:asm_addr)
+      if lnum != 0
+        exe 'sign unplace ' . s:asm_id
+        exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
+        exe 'normal ' . lnum . 'z.'
       endif
-    else
-      exe 'sign unplace ' . s:asm_id
-      exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
-      exe 'normal ' . lnum . 'z.'
+
+      call win_gotoid(curwinid)
+    endif
+
+    let s:parsing_disasm_msg = 0
+    let s:asm_lines = []
+  elseif a:msg =~ '^\^error,msg='
+    if s:parsing_disasm_msg == 1
+      " Disassemble call ran into an error. This can happen when gdb can't
+      " find the function frame address, so let's try to disassemble starting
+      " at current PC
+      call s:SendCommand('disassemble $pc,+100')
+    endif
+    let s:parsing_disasm_msg = 0
+  elseif a:msg =~ '\&\"disassemble \$pc'
+    if a:msg =~ '+100'
+      " This is our second disasm attempt
+      let s:parsing_disasm_msg = 2
+    endif
+  else
+    let value = substitute(a:msg, '^\~\"[ ]*', '', '')
+    let value = substitute(value, '^=>[ ]*', '', '')
+    let value = substitute(value, '\\n\"\r$', '', '')
+    let value = substitute(value, '\r', '', '')
+    let value = substitute(value, '\\t', ' ', 'g')
+
+    if value != '' || !empty(s:asm_lines)
+      call add(s:asm_lines, value)
     endif
   endif
 endfunc
@@ -703,48 +618,6 @@ func s:HandleCursor(msg)
 
   call win_gotoid(wid)
 endfunc
-
-func s:DefineBreakpointSign(id)
-  let enabled = s:breakpoints[a:id]["enabled"]
-  let nr = printf('%d', a:id)
-  if enabled == "n"
-    let hiName = "debugBreakpointDisabled"
-  else
-    let hiName = "debugBreakpoint"
-  endif
-  let signText = substitute(nr, '\..*', '', '')
-  if len(signText) > 2
-    let signText = "*"
-  end
-  exe "sign define debugBreakpoint" . nr . " text=" . signText . " texthl=" . hiName
-endfunc
-
-func! s:GoToBreakpoint(id)
-  if !has_key(s:breakpoints, a:id)
-    echoerr "No entry for breakpoint " . a:id
-    return
-  endif
-
-  let entry = s:breakpoints[a:id]
-  if has_key(entry, "pending")
-    echoerr "Cannot go to pending breakpoint " . a:id
-    return
-  endif
-
-  let lnum = entry['lnum']
-  let fname = entry['fname']
-  call win_gotoid(s:sourcewin)
-  exe "edit " . fnameescape(fname)
-  exe "normal " . lnum . "G"
-endfunc
-
-function s:MatchGetCapture(string, pat)
-  let res = matchlist(a:string, a:pat)
-  if empty(res)
-    return ""
-  endif
-  return res[1]
-endfunction
 
 " Handle setting a breakpoint
 " Will update the sign that shows the breakpoint
@@ -821,11 +694,6 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
   endfor
 endfunc
 
-func s:PlaceBreakpointSign(id, entry)
-  let nr = printf('%d', a:id)
-  exe 'sign place ' . s:Breakpoint2SignNumber(a:id) . ' line=' . a:entry['lnum'] . ' name=debugBreakpoint' . nr . ' priority=110 file=' . a:entry['fname']
-endfunc
-
 " Handle deleting a breakpoint
 " Will remove the sign that shows the breakpoint
 func s:HandleBreakpointDelete(msg)
@@ -849,7 +717,158 @@ func s:HandleProgramRun(msg)
     return
   endif
   let s:pid = nr
-  "call ch_log('Detected process ID: ' . s:pid)
+endfunc
+
+" Handle the result of data-evaluate-expression
+func s:HandleEvaluate(msg)
+  let value = substitute(a:msg, '.*value="\(.*\)"', '\1', '')
+  let value = substitute(value, '\\"', '"', 'g')
+  " multi-byte characters arrive in octal form
+  let value = substitute(value, '\\\o\o\o', {-> eval('"' .. submatch(0) .. '"')}, 'g')
+  let value = substitute(value, '', '\1', '')
+  echomsg '"' . s:evalexpr . '": ' . value
+
+  if s:evalexpr[0] != '*' && value =~ '^0x' && value != '0x0' && value !~ '"$'
+    " Looks like a pointer, also display what it points to.
+    let s:ignoreEvalError = 1
+    call s:SendEval('*' . s:evalexpr)
+  endif
+endfunc
+
+" Handle an error.
+func s:HandleError(msg)
+  if s:ignoreEvalError
+    " Result of s:SendEval() failed, ignore.
+    let s:ignoreEvalError = 0
+    return
+  endif
+  let msgVal = s:MatchGetCapture(a:msg, 'msg="\([^"]*\)"')
+  echoerr substitute(msgVal, '\\"', '"', 'g')
+endfunc
+
+function s:MatchGetCapture(string, pat)
+  let res = matchlist(a:string, a:pat)
+  if empty(res)
+    return ""
+  endif
+  return res[1]
+endfunction
+"}}}
+
+"""""""""""""""""""""""""""""""Go to win or create it"""""""""""""""""""""""""""""""{{{
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+func s:GotoSourcewinOrCreateIt()
+  if !win_gotoid(s:sourcewin)
+    below new
+    let s:sourcewin = win_getid(winnr())
+    call TermDebugGoToPC()
+  endif
+endfunc
+
+func s:GotoGdbwinOrCreateIt()
+  if !win_gotoid(s:gdbwin)
+    above new
+    let s:gdbwin = win_getid(winnr())
+    exe "b " . s:gdbbuf
+  endif
+endfunc
+
+func s:GotoAsmwinOrCreateIt()
+  if !win_gotoid(s:asmwin)
+    if win_gotoid(s:sourcewin)
+      exe 'rightbelow new'
+    else
+      exe 'new'
+    endif
+
+    let s:asmwin = win_getid(winnr())
+
+    setlocal nowrap
+    setlocal number
+    setlocal noswapfile
+    setlocal buftype=nofile
+    setlocal modifiable
+
+    let asmbuf = bufnr('Termdebug-asm-listing')
+    if asmbuf > 0
+      exe 'buffer' . asmbuf
+    else
+      exe 'file Termdebug-asm-listing'
+    endif
+  endif
+
+  if s:asm_addr != ''
+    let lnum = search('^' . s:asm_addr)
+    if lnum == 0
+      if TermDebugIsStopped()
+        call s:SendCommand('disassemble $pc')
+      endif
+    else
+      exe 'sign unplace ' . s:asm_id
+      exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
+      exe 'normal ' . lnum . 'z.'
+    endif
+  endif
+endfunc
+" }}}
+
+"""""""""""""""""""""""""""""""Breakpoint signs"""""""""""""""""""""""""""""""{{{
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+func s:Highlight(init, old, new)
+  let default = a:init ? 'default ' : ''
+  if a:new ==# 'light' && a:old !=# 'light'
+    exe "hi " . default . "debugPC term=reverse ctermbg=lightblue guibg=lightblue"
+  elseif a:new ==# 'dark' && a:old !=# 'dark'
+    exe "hi " . default . "debugPC term=reverse ctermbg=darkblue guibg=darkblue"
+  endif
+endfunc
+
+call s:Highlight(1, '', &background)
+hi default debugBreakpoint gui=reverse guibg=red
+hi default debugBreakpointDisabled gui=reverse guibg=gray
+
+" Take a breakpoint number as used by GDB and turn it into an integer.
+func s:Breakpoint2SignNumber(id)
+  return s:break_id + a:id
+endfunction
+
+func s:DefineBreakpointSign(id)
+  let enabled = s:breakpoints[a:id]["enabled"]
+  let nr = printf('%d', a:id)
+  if enabled == "n"
+    let hiName = "debugBreakpointDisabled"
+  else
+    let hiName = "debugBreakpoint"
+  endif
+  let signText = substitute(nr, '\..*', '', '')
+  if len(signText) > 2
+    let signText = "*"
+  end
+  exe "sign define debugBreakpoint" . nr . " text=" . signText . " texthl=" . hiName
+endfunc
+
+func! s:GoToBreakpoint(id)
+  if !has_key(s:breakpoints, a:id)
+    echoerr "No entry for breakpoint " . a:id
+    return
+  endif
+
+  let entry = s:breakpoints[a:id]
+  if has_key(entry, "pending")
+    echoerr "Cannot go to pending breakpoint " . a:id
+    return
+  endif
+
+  let lnum = entry['lnum']
+  let fname = entry['fname']
+  call win_gotoid(s:sourcewin)
+  exe "edit " . fnameescape(fname)
+  exe "normal " . lnum . "G"
+endfunc
+
+func s:PlaceBreakpointSign(id, entry)
+  let nr = printf('%d', a:id)
+  exe 'sign place ' . s:Breakpoint2SignNumber(a:id) . ' line=' . a:entry['lnum'] . ' name=debugBreakpoint' . nr . ' priority=110 file=' . a:entry['fname']
 endfunc
 
 " Handle a BufRead autocommand event: place any signs.
@@ -861,8 +880,9 @@ func s:BufRead()
     endif
   endfor
 endfunc
+" }}}
 
 let &cpo = s:keepcpo
 unlet s:keepcpo
 
-" vim: set sw=2 ts=2 sts=2 et:
+" vim: set sw=2 ts=2 sts=2 foldmethod=marker et:
