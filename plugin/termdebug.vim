@@ -76,6 +76,10 @@ function! TermDebugIsStopped()
   return s:stopped
 endfunction
 
+function! TermDebugGetPid()
+  return s:pid
+endfunction
+
 function! TermDebugGoToPC()
   for signsData in sign_getplaced()
     let signDebugPC = filter(signsData['signs'], {_, s -> s['name'] == "debugPC"})
