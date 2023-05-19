@@ -57,6 +57,14 @@ set cpo&vim
 
 """""""""""""""""""""""""""""""Global functions"""""""""""""""""""""""""""""""{{{
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+func TermDebugStart()
+  call s:TermDebugStartCommon({})
+endfunc
+
+func TermDebugStartSSH(ssh)
+  call s:TermDebugStartCommon({'ssh': a:ssh})
+endfunc
+
 function! TermDebugIsOpen()
   return exists('s:gdbwin')
 endfunction
@@ -160,14 +168,6 @@ let s:asm_addr = ''
 
 """""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""{{{
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-func TermDebugStart()
-  call s:TermDebugStartCommon({})
-endfunc
-
-func TermDebugStartSSH(ssh)
-  call s:TermDebugStartCommon({'ssh': a:ssh})
-endfunc
-
 func s:TermDebugStartCommon(opts)
   if exists('s:gdbwin')
     echoerr 'Terminal debugger already running, cannot run two'
