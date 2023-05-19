@@ -228,7 +228,7 @@ func s:LaunchGdb()
   let gdb_cmd += ['-ex', '"echo startupdone\n"']
   " Launch GDB through ssh
   if has_key(s:gdb_startup_state, "ssh")
-    let gdb_cmd = ['ssh', '-t', s:gdb_startup_state['ssh'], join(gdb_cmd, " ")]
+    let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:gdb_startup_state['ssh'], join(gdb_cmd, " ")]
   endif
 
   execute 'new'
@@ -267,7 +267,7 @@ func s:GdbOutput(job_id, msgs, event)
       " Create a hidden terminal window to communicate with gdb
       let comm_cmd = "tty; tail -f /dev/null"
       if has_key(s:gdb_startup_state, "ssh")
-        let comm_cmd = 'ssh -t ' . s:gdb_startup_state['ssh'] . ' "' . comm_cmd . '"'
+        let comm_cmd = 'ssh -o "ConnectTimeout 1" -t ' . s:gdb_startup_state['ssh'] . ' "' . comm_cmd . '"'
       endif
       let s:comm_job_id = jobstart(comm_cmd, {
             \ 'on_stdout': function('s:CommOutput'),
