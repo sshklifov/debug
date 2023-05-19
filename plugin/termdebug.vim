@@ -215,20 +215,20 @@ func s:TermDebugStartCommon(opts)
 endfunc
 
 func s:LaunchGdb()
-  let gdb_cmd = [g:termdebugger]
+  let gdb_cmd = g:termdebugger
   " Add -quiet to avoid the intro message causing a hit-enter prompt.
-  let gdb_cmd += ['-quiet']
+  let gdb_cmd .= ' -quiet'
   " Disable pagination, it causes everything to stop at the gdb
-  let gdb_cmd += ['-iex', '"set pagination off"']
+  let gdb_cmd .= ' -iex "set pagination off"'
   " Interpret commands while the target is running.  This should usually only
   " be exec-interrupt, since many commands don't work properly while the
   " target is running (so execute during startup).
-  let gdb_cmd += ['-iex', '"set mi-async on"']
+  let gdb_cmd .= ' -iex "set mi-async on"'
   " Command executed _after_ startup is done, provides us with the necessary feedback
-  let gdb_cmd += ['-ex', '"echo startupdone\n"']
+  let gdb_cmd .= ' -ex "echo startupdone\n"'
   " Launch GDB through ssh
   if has_key(s:gdb_startup_state, "ssh")
-    let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:gdb_startup_state['ssh'], join(gdb_cmd, " ")]
+    let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:gdb_startup_state['ssh'], gdb_cmd]
   endif
 
   execute 'new'
