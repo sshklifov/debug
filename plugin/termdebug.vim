@@ -104,10 +104,13 @@ endfunc
 
 func TermDebugToggleMessages()
   if exists("s:capture_buf")
-    exe "bwipe " . s:capture_buf
     unlet s:capture_buf
   else
-    let s:capture_buf = bufadd("Gdb messages")
+    let bufname = "Gdb messages"
+    let s:capture_buf = bufnr(bufname)
+    if s:capture_buf < 0
+      let s:capture_buf = bufadd("Gdb messages")
+    endif
     call bufload(s:capture_buf)
     call setbufvar(s:capture_buf, "&buftype", "nofile")
     call setbufvar(s:capture_buf, "&swapfile", 0)
