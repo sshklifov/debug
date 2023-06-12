@@ -324,10 +324,8 @@ func s:CommOutput(job_id, msgs, event)
     elseif msg != ''
       if msg =~ '^\(\*stopped\|\*running\|=thread-selected\)'
         call s:HandleCursor(msg)
-      elseif msg =~ '^\^done,bkpt=' || msg =~ '^=breakpoint-created,'
-        call s:HandleNewBreakpoint(msg, 0)
-      elseif msg =~ '^=breakpoint-modified,'
-        call s:HandleNewBreakpoint(msg, 1)
+      elseif msg =~ '^\^done,bkpt=' || msg =~ '^=breakpoint-created,' || msg =~ '^=breakpoint-modified,'
+        call s:HandleNewBreakpoint(msg)
       elseif msg =~ '^=breakpoint-deleted,'
         call s:HandleBreakpointDelete(msg)
       elseif msg =~ '^=thread-group-started'
@@ -609,7 +607,7 @@ endfunc
 
 " Handle setting a breakpoint
 " Will update the sign that shows the breakpoint
-func s:HandleNewBreakpoint(msg, modifiedFlag)
+func s:HandleNewBreakpoint(msg)
   if a:msg !~ 'fullname='
     " A watch or a pending breakpoint does not have a file name
     if a:msg =~ 'pending='
@@ -648,18 +646,6 @@ func s:HandleNewBreakpoint(msg, modifiedFlag)
 
     if empty(fname) || empty(lnum)
       continue
-    endif
-
-    " Sanity check (for multi breakpoints mainly)
-    if !a:modifiedFlag
-      if has_key(entry, 'fname') && entry['fname'] != fname
-        echoerr "Assert failed, breakpoint " . id " changed its location. "
-              \ . entry['fname'] . " -> " . fname
-      endif
-      if has_key(entry, 'lnum') && entry['lnum'] != lnum
-        echoerr "Assert failed, breakpoint " . id " changed its location. "
-              \ . entry['lnum'] . " -> " . lnum
-      endif
     endif
 
     let entry['fname'] = fname
