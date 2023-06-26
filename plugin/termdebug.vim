@@ -309,6 +309,11 @@ func s:CommOutput(job_id, msgs, event)
       call appendbufline(s:capture_buf, "$", m)
     endif
 
+    if exists('#User#TermdebugCommOutput')
+      let g:termdebug_comm_msg = msg
+      doauto <nomodeline> User TermdebugCommOutput
+    endif
+
     if has_key(s:gdb_startup_state, "missing_mi")
       " Capture device name of communication terminal.
       " The first command executed in the terminal will be "tty" and the output will be parsed here.
