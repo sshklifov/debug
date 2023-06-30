@@ -106,22 +106,6 @@ func TermDebugSendMICommand(cmd)
   call chansend(s:comm_job_id, a:cmd . "\r")
 endfunc
 
-func TermDebugToggleMessages()
-  if exists("s:capture_buf")
-    unlet s:capture_buf
-  else
-    let bufname = "Gdb messages"
-    let s:capture_buf = bufnr(bufname)
-    if s:capture_buf < 0
-      let s:capture_buf = bufadd("Gdb messages")
-    endif
-    call bufload(s:capture_buf)
-    call setbufvar(s:capture_buf, "&buftype", "nofile")
-    call setbufvar(s:capture_buf, "&swapfile", 0)
-    call setbufvar(s:capture_buf, "&buflisted", 1)
-  endif
-endfunc
-
 func s:Compare(a, b)
   let alen = len(a:a)
   let blen = len(a:b)
@@ -313,9 +297,10 @@ func s:CommOutput(job_id, msgs, event)
       let msg = msg[1:]
     endif
 
-    if exists("s:capture_buf")
+    if exists("g:termdebug_capture_msgs") && g:termdebug_capture_msgs
+      let capture_buf = s:GetMessagesBuf()
       let m = substitute(msg, "[^[:print:]]", "", "g")
-      call appendbufline(s:capture_buf, "$", m)
+      call appendbufline(capture_buf, "$", m)
     endif
 
     if has_key(s:gdb_startup_state, "missing_mi")
@@ -351,6 +336,16 @@ func s:CommOutput(job_id, msgs, event)
   endfor
 endfunc
 
+func s:GetMessagesBuf()
+  let bufname = "Gdb messages"
+  let capture_buf = bufadd("Gdb messages")
+  call setbufvar(capture_buf, "&buftype", "nofile")
+  call setbufvar(capture_buf, "&swapfile", 0)
+  call setbufvar(capture_buf, "&buflisted", 1)
+  call bufload(capture_buf)
+  return capture_buf
+endfunc
+
 " Install commands in the current window to control the debugger.
 func s:InstallCommands()
   let save_cpo = &cpo
@@ -380,6 +375,11 @@ endfunc
 
 func s:EndDebugCommon()
   let curwinid = win_getid(winnr())
+
+  let msgbuf = bufnr("Gdb messages")
+  if msgbuf >= 0
+    exe 'bwipe!' . msgbuf
+  endif
 
   if exists("s:stopped")
     unlet s:stopped
