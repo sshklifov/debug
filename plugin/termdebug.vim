@@ -102,6 +102,10 @@ func TermDebugSendCommand(cmd)
   call chansend(s:gdb_job_id, a:cmd . "\r")
 endfunc
 
+func TermDebugSendMICommand(cmd)
+  call chansend(s:comm_job_id, a:cmd . "\r")
+endfunc
+
 func TermDebugToggleMessages()
   if exists("s:capture_buf")
     unlet s:capture_buf
