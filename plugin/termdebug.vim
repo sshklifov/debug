@@ -298,6 +298,11 @@ func s:GdbOutput(job_id, msgs, event)
 endfunc
 
 func s:CommOutput(job_id, msgs, event)
+  if exists('#User#TermdebugCommOutput')
+    let g:termdebug_comm_msgs = a:msgs
+    doauto <nomodeline> User TermdebugCommOutput
+  endif
+
   for msg in a:msgs
     " remove prefixed NL
     if msg[0] == "\n"
@@ -307,11 +312,6 @@ func s:CommOutput(job_id, msgs, event)
     if exists("s:capture_buf")
       let m = substitute(msg, "[^[:print:]]", "", "g")
       call appendbufline(s:capture_buf, "$", m)
-    endif
-
-    if exists('#User#TermdebugCommOutput')
-      let g:termdebug_comm_msg = msg
-      doauto <nomodeline> User TermdebugCommOutput
     endif
 
     if has_key(s:gdb_startup_state, "missing_mi")
