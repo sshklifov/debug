@@ -287,7 +287,7 @@ endfunc
 
 func s:CommOutput(job_id, msgs, event)
   if exists('#User#TermdebugCommOutput')
-    let g:termdebug_comm_msgs = a:msgs
+    let g:termdebug_comm_output = a:msgs
     doauto <nomodeline> User TermdebugCommOutput
   endif
 
