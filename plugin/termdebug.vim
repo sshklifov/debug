@@ -338,7 +338,7 @@ endfunc
 
 func s:GetMessagesBuf()
   let bufname = "Gdb messages"
-  let capture_buf = bufadd("Gdb messages")
+  let capture_buf = bufadd(bufname)
   call setbufvar(capture_buf, "&buftype", "nofile")
   call setbufvar(capture_buf, "&swapfile", 0)
   call setbufvar(capture_buf, "&buflisted", 1)
