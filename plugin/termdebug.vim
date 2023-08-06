@@ -337,6 +337,10 @@ func s:CommOutput(job_id, msgs, event)
 endfunc
 
 func s:GetMessagesBuf()
+  if !exists("g:termdebug_capture_msgs") || !g:termdebug_capture_msgs
+    return -1
+  endif
+
   let bufname = "Gdb messages"
   let capture_buf = bufadd(bufname)
   call setbufvar(capture_buf, "&buftype", "nofile")
@@ -351,6 +355,7 @@ func s:InstallCommands()
   let save_cpo = &cpo
   set cpo&vim
 
+  command! Capture call s:GotoCaptureOrCreateIt()
   command! Gdb call s:GotoGdbwinOrCreateIt()
   command! Source call s:GotoSourcewinOrCreateIt()
   command! Asm call s:GotoAsmwinOrCreateIt()
@@ -379,6 +384,11 @@ func s:EndDebugCommon()
   let msgbuf = bufnr("Gdb messages")
   if msgbuf >= 0
     exe 'bwipe!' . msgbuf
+  endif
+
+  let capturebuf = s:GetMessagesBuf()
+  if capturebuf >= 0
+    exe 'bwipe!' . capturebuf
   endif
 
   if exists("s:stopped")
@@ -421,6 +431,7 @@ endfunc
 
 " Delete installed debugger commands in the current window.
 func s:DeleteCommands()
+  delcommand Capture
   delcommand Gdb
   delcommand Source
   delcommand Asm
@@ -719,6 +730,19 @@ endfunction
 
 """""""""""""""""""""""""""""""Go to win or create it"""""""""""""""""""""""""""""""{{{
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+func s:GotoCaptureOrCreateIt()
+  if !exists("g:termdebug_capture_msgs")
+    echoerr "Need to set g:termdebug_capture_msgs to 1"
+    return
+  endif
+
+  if !exists("s:capturewin") || !win_gotoid(s:capturewin)
+    tabnew
+    exe "b " . s:GetMessagesBuf()
+    let s:capturewin = win_getid(winnr())
+  endif
+endfunc
+
 func s:GotoSourcewinOrCreateIt()
   if !win_gotoid(s:sourcewin)
     below new
