@@ -159,6 +159,8 @@ let s:break_id = 14  " breakpoint number is added to this
 let s:parsing_disasm_msg = 0
 let s:asm_lines = []
 let s:asm_addr = ''
+
+let g:comm = ""
 "}}}
 
 """""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""{{{
@@ -265,7 +267,7 @@ func s:GdbOutput(job_id, msgs, event)
         let comm_cmd = 'ssh -o "ConnectTimeout 1" -t ' . s:gdb_startup_state['ssh'] . ' "' . comm_cmd . '"'
       endif
       let s:comm_job_id = jobstart(comm_cmd, {
-            \ 'on_stdout': function('s:CommOutput'),
+            \ 'on_stdout': function('s:CommJoin'),
             \ 'pty': v:true,
             \ })
       if s:comm_job_id == 0
@@ -285,55 +287,58 @@ func s:GdbOutput(job_id, msgs, event)
   endfor
 endfunc
 
-func s:CommOutput(job_id, msgs, event)
+func s:CommJoin(job_id, msgs, event)
+  for msg in filter(a:msgs, "!empty(v:val)")
+    let g:comm .= msg
+    if g:comm[-1:-1] == "\r"
+      call s:CommOutput(g:comm[0:-2])
+      let g:comm = ""
+    endif
+  endfor
+endfunc
+
+func s:CommOutput(msg)
   if exists('#User#TermdebugCommOutput')
-    let g:termdebug_comm_output = a:msgs
+    let g:termdebug_comm_output = a:msg
     doauto <nomodeline> User TermdebugCommOutput
   endif
 
-  for msg in a:msgs
-    " remove prefixed NL
-    if msg[0] == "\n"
-      let msg = msg[1:]
-    endif
+  if exists("g:termdebug_capture_msgs") && g:termdebug_capture_msgs
+    let capture_buf = s:GetMessagesBuf()
+    let m = substitute(a:msg, "[^[:print:]]", "", "g")
+    call appendbufline(capture_buf, "$", m)
+  endif
 
-    if exists("g:termdebug_capture_msgs") && g:termdebug_capture_msgs
-      let capture_buf = s:GetMessagesBuf()
-      let m = substitute(msg, "[^[:print:]]", "", "g")
-      call appendbufline(capture_buf, "$", m)
+  if has_key(s:gdb_startup_state, "missing_mi")
+    " Capture device name of communication terminal.
+    " The first command executed in the terminal will be "tty" and the output will be parsed here.
+    let pty = s:MatchGetCapture(a:msg, '\(' . '/dev/pts/[0-9]\+' . '\)')
+    if pty != ""
+      unlet s:gdb_startup_state["missing_mi"]
+      " Connect gdb to the communication pty, using the GDB/MI interface.
+      " Prefix "server" to avoid adding this to the history.
+      call chansend(s:gdb_job_id, 'server new-ui mi ' . pty . "\r")
     endif
-
-    if has_key(s:gdb_startup_state, "missing_mi")
-      " Capture device name of communication terminal.
-      " The first command executed in the terminal will be "tty" and the output will be parsed here.
-      let pty = s:MatchGetCapture(msg, '\(' . '/dev/pts/[0-9]\+' . '\)')
-      if pty != ""
-        unlet s:gdb_startup_state["missing_mi"]
-        " Connect gdb to the communication pty, using the GDB/MI interface.
-        " Prefix "server" to avoid adding this to the history.
-        call chansend(s:gdb_job_id, 'server new-ui mi ' . pty . "\r")
-      endif
-    elseif s:parsing_disasm_msg
-      call s:HandleDisasmMsg(msg)
-    elseif msg != ''
-      if msg =~ '^\(\*stopped\|\*running\|=thread-selected\)'
-        call s:HandleCursor(msg)
-      elseif msg =~ '^\^done,bkpt=' || msg =~ '^=breakpoint-created,' || msg =~ '^=breakpoint-modified,'
-        call s:HandleNewBreakpoint(msg)
-      elseif msg =~ '^=breakpoint-deleted,'
-        call s:HandleBreakpointDelete(msg)
-      elseif msg =~ '^=thread-group-started'
-        call s:HandleProgramRun(msg)
-      elseif msg =~ '^\^done,value='
-        call s:HandleEvaluate(msg)
-      elseif msg =~ '^\^error,msg='
-        call s:HandleError(msg)
-      elseif msg =~ '^disassemble'
-        let s:parsing_disasm_msg = 1
-        let s:asm_lines = []
-      endif
+  elseif s:parsing_disasm_msg
+    call s:HandleDisasmMsg(a:msg)
+  elseif a:msg != ''
+    if a:msg =~ '^\(\*stopped\|\*running\|=thread-selected\)'
+      call s:HandleCursor(a:msg)
+    elseif a:msg =~ '^\^done,bkpt=' || a:msg =~ '^=breakpoint-created,' || a:msg =~ '^=breakpoint-modified,'
+      call s:HandleNewBreakpoint(a:msg)
+    elseif a:msg =~ '^=breakpoint-deleted,'
+      call s:HandleBreakpointDelete(a:msg)
+    elseif a:msg =~ '^=thread-group-started'
+      call s:HandleProgramRun(a:msg)
+    elseif a:msg =~ '^\^done,value='
+      call s:HandleEvaluate(a:msg)
+    elseif a:msg =~ '^\^error,msg='
+      call s:HandleError(a:msg)
+    elseif a:msg =~ '^disassemble'
+      let s:parsing_disasm_msg = 1
+      let s:asm_lines = []
     endif
-  endfor
+  endif
 endfunc
 
 func s:GetMessagesBuf()
