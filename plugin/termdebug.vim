@@ -655,6 +655,9 @@ func s:HandleNewBreakpoint(msg)
     if empty(id)
       continue
     endif
+    " Breakpoint might move to a new location (via breakpoint-modified)
+    " Remove previous sign
+    exe 'sign unplace ' . s:Breakpoint2SignNumber(id)
 
     " Handle multi breakpoint
     if has_key(s:breakpoints, id)
