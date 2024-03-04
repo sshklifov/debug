@@ -364,7 +364,7 @@ func s:InstallCommands()
   command! Gdb call s:GotoGdbwinOrCreateIt()
   command! Source call s:GotoSourcewinOrCreateIt()
   command! Asm call s:GotoAsmwinOrCreateIt()
-  command! -nargs=1 Break call s:GoToBreakpoint(<f-args>)
+  command! -nargs=? Break call s:GoToBreakpoint(<q-args>)
 
   let &cpo = save_cpo
 endfunc
@@ -842,6 +842,12 @@ func s:DefineBreakpointSign(id)
 endfunc
 
 func! s:GoToBreakpoint(id)
+  " No argument supplied, load breakpoints into quickfix
+  if a:id == ""
+    call TermDebugBrToQf()
+    return
+  endif
+
   if !has_key(s:breakpoints, a:id)
     echoerr "No entry for breakpoint " . a:id
     return
