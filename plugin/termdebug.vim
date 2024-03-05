@@ -160,7 +160,7 @@ let s:parsing_disasm_msg = 0
 let s:asm_lines = []
 let s:asm_addr = ''
 
-let g:comm = ""
+let g:comm_buf = ""
 "}}}
 
 """""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""{{{
@@ -202,13 +202,29 @@ func s:TermDebugStartCommon(opts)
   let s:sourcewin = win_getid(winnr())
 
   let s:gdb_startup_state = a:opts
-  call s:LaunchGdb()
+  call s:Launch()
   call s:InstallCommands()
+endfunc
 
-  call win_gotoid(s:gdbwin)
-  " Set the filetype, this can be used to add mappings.
-  set filetype=termdebug
-  startinsert
+func s:Launch()
+  " Create a hidden terminal window to communicate with gdb
+  let comm_cmd = &shell
+  if has_key(s:gdb_startup_state, "ssh")
+    let comm_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:gdb_startup_state['ssh']]
+  endif
+  let s:comm_job_id = jobstart(comm_cmd, {
+        \ 'on_stdout': function('s:CommJoin'),
+        \ 'pty': v:true,
+        \ })
+  if s:comm_job_id == 0
+    echoerr 'Invalid argument (or job table is full) while opening communication terminal window'
+    return
+  elseif s:comm_job_id == -1
+    echoerr 'Failed to open the communication terminal window'
+    return
+  endif
+  call chansend(s:comm_job_id, "tty\r")
+  call chansend(s:comm_job_id, "tail -f /dev/null\r")
 endfunc
 
 func s:LaunchGdb()
@@ -221,8 +237,8 @@ func s:LaunchGdb()
   " be exec-interrupt, since many commands don't work properly while the
   " target is running (so execute during startup).
   let gdb_cmd .= ' -iex "set mi-async on"'
-  " Command executed _after_ startup is done, provides us with the necessary feedback
-  let gdb_cmd .= ' -ex "echo startupdone\n"'
+  " Command executed _after_ startup is done
+  let gdb_cmd .= ' -ex "new-ui mi ' . s:gdb_startup_state['tty'] . '"'
   " Launch GDB through ssh
   if has_key(s:gdb_startup_state, "ssh")
     let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:gdb_startup_state['ssh'], gdb_cmd]
@@ -234,7 +250,7 @@ func s:LaunchGdb()
         \ 'on_stdout': function('s:GdbOutput')
         \ })
   if s:gdb_job_id == 0
-    echoerr 'invalid argument (or job table is full) while opening gdb terminal window'
+    echoerr 'Invalid argument (or job table is full) while opening gdb terminal window'
     return
   elseif s:gdb_job_id == -1
     echoerr 'Failed to open the gdb terminal window'
@@ -244,41 +260,20 @@ func s:LaunchGdb()
   let s:gdbbuf = gdb_job_info['buffer']
   let s:gdbwin = win_getid(winnr())
 
-  " Rename the Gdb buffer
-  call win_gotoid(s:gdbwin)
+  " Rename the terminal window
   let name = "Gdb terminal"
   let nr = bufnr(name)
   if nr >= 0
     exe "bwipe " . nr
   endif
   exe "file " . name
+  " Set the filetype, this can be used to add mappings.
+  set filetype=termdebug
+  startinsert
 endfunc
 
 func s:GdbOutput(job_id, msgs, event)
   for msg in a:msgs
-    if msg =~ "startupdone"
-      " If this key exists, we don't know the tty of the communication job yet.
-      " MI interface has not yet been set up.
-      let s:gdb_startup_state['missing_mi'] = 1
-
-      " Create a hidden terminal window to communicate with gdb
-      let comm_cmd = "tty; tail -f /dev/null"
-      if has_key(s:gdb_startup_state, "ssh")
-        let comm_cmd = 'ssh -o "ConnectTimeout 1" -t ' . s:gdb_startup_state['ssh'] . ' "' . comm_cmd . '"'
-      endif
-      let s:comm_job_id = jobstart(comm_cmd, {
-            \ 'on_stdout': function('s:CommJoin'),
-            \ 'pty': v:true,
-            \ })
-      if s:comm_job_id == 0
-        echoerr 'invalid argument (or job table is full) while opening communication terminal window'
-        return
-      elseif s:comm_job_id == -1
-        echoerr 'Failed to open the communication terminal window'
-        return
-      endif
-    endif
-
     if msg =~ 'New UI allocated'
       if exists('#User#TermdebugStartPost')
         doauto <nomodeline> User TermdebugStartPost
@@ -289,35 +284,28 @@ endfunc
 
 func s:CommJoin(job_id, msgs, event)
   for msg in filter(a:msgs, "!empty(v:val)")
-    let g:comm .= msg
-    if g:comm[-1:-1] == "\r"
-      call s:CommOutput(g:comm[0:-2])
-      let g:comm = ""
+    let g:comm_buf .= msg
+    if g:comm_buf[-1:] == "\r"
+      call s:CommOutput(g:comm_buf[0:-2])
+      let g:comm_buf = ""
     endif
   endfor
 endfunc
 
 func s:CommOutput(msg)
-  if exists('#User#TermdebugCommOutput')
-    let g:termdebug_comm_output = a:msg
-    doauto <nomodeline> User TermdebugCommOutput
-  endif
-
   if exists("g:termdebug_capture_msgs") && g:termdebug_capture_msgs
     let capture_buf = s:GetMessagesBuf()
     let m = substitute(a:msg, "[^[:print:]]", "", "g")
     call appendbufline(capture_buf, "$", m)
   endif
 
-  if has_key(s:gdb_startup_state, "missing_mi")
+  if !has_key(s:gdb_startup_state, "tty")
     " Capture device name of communication terminal.
     " The first command executed in the terminal will be "tty" and the output will be parsed here.
     let pty = s:MatchGetCapture(a:msg, '\(' . '/dev/pts/[0-9]\+' . '\)')
     if pty != ""
-      unlet s:gdb_startup_state["missing_mi"]
-      " Connect gdb to the communication pty, using the GDB/MI interface.
-      " Prefix "server" to avoid adding this to the history.
-      call chansend(s:gdb_job_id, 'server new-ui mi ' . pty . "\r")
+      let s:gdb_startup_state["tty"] = pty
+      call s:LaunchGdb()
     endif
   elseif s:parsing_disasm_msg
     call s:HandleDisasmMsg(a:msg)
