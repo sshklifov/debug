@@ -852,9 +852,10 @@ func! s:GoToBreakpoint(id)
 
   let lnum = entry['lnum']
   let fname = entry['fname']
-  call win_gotoid(s:sourcewin)
-  exe "edit " . fnameescape(fname)
-  exe "normal " . lnum . "G"
+  if expand("%:p") != fname
+    exe "edit " . fnameescape(fname)
+  endif
+  call cursor(lnum, 0)
 endfunc
 
 func s:PlaceBreakpointSign(id, entry)
