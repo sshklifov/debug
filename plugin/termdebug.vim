@@ -707,6 +707,9 @@ func s:HandleProgramRun(msg)
     return
   endif
   let s:pid = nr
+  if exists('#User#TermdebugPidPost')
+    doauto <nomodeline> User TermdebugPidPost
+  endif
 endfunc
 
 " Handle an error.
