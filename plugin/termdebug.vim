@@ -123,20 +123,9 @@ func TermDebugEvaluate(what)
 endfunc
 
 func TermDebugToggleAsm()
-  let asm_mode = (s:pcbuf == bufnr(s:asm_bufname))
-  if asm_mode
-    " TODO
-  else
-    let origw = win_getid()
-    call TermDebugGoToSource()
-    let nr = bufnr(s:asm_bufname)
-    exe "b " . nr
-    let s:pcbuf = nr
-    " TODO position asm window
-    let cmd = "-data-disassemble -a $pc 0"
-    call TermDebugSendMICommand(s:disas_token, cmd, function('s:HandleDisassemble'))
-    call win_gotoid(origw)
-  endif
+  let s:asm_mode = s:asm_mode ? 0 : 1
+  call s:ClearCursorSign()
+  call TermDebugSendMICommand(s:frame_token, '-stack-info-frame', function('s:PlaceCursorSign'))
 endfunc
 
 func TermDebugBrToQf()
@@ -191,12 +180,14 @@ func TermDebugStart(...)
   " Sync tokens
   const s:eval_token = 1
   const s:disas_token = 2
+  const s:frame_token = 3
   " Set defaults for required variables
   let s:breakpoints = #{}
   let s:callbacks = #{}
   let s:pcbuf = -1
   let s:pid = 0
   let s:stopped = 1
+  let s:asm_mode = 0
   let s:sourcewin = win_getid()
   let s:comm_buf = ""
   if a:0 > 0
@@ -382,16 +373,18 @@ func s:HandleCursor(msg)
   if class == 'running'
     return
   endif
+  call s:PlaceCursorSign(a:msg)
+endfunc
 
-  let asm_mode = (s:pcbuf == bufnr(s:asm_bufname))
-  if !asm_mode
-    call s:HandleSourceCursor(a:msg)
+func s:PlaceCursorSign(msg)
+  if s:asm_mode
+    call s:PlaceAsmCursor(a:msg)
   else
-    call s:HandleAsmCursor(a:msg)
+    call s:PlaceSourceCursor(a:msg)
   endif
 endfunc
 
-func s:HandleSourceCursor(msg)
+func s:PlaceSourceCursor(msg)
   let ns = nvim_create_namespace('TermDebugPC')
   let filename = s:GetRecordVar(a:msg, 'fullname')
   let lnum = s:GetRecordVar(a:msg, 'line')
@@ -410,13 +403,9 @@ func s:HandleSourceCursor(msg)
   endif
 endfunc
 
-func s:HandleAsmCursor(msg)
+func s:PlaceAsmCursor(msg)
   let addr = s:GetRecordVar(a:msg, 'addr')
-  let lines = getbufline(bufnr(s:asm_bufname), 1, '$')
-  let lnum = match(lines, '^' . addr)
-  if lnum > 0
-    call s:PlaceAsmCursor(addr)
-  else
+  if !s:SelectAsmAddr(addr)
     " Reload disassembly
     let cmd = printf("-data-disassemble -a %s 0", addr)
     let Cb = function('s:HandleDisassemble', [addr])
@@ -424,17 +413,26 @@ func s:HandleAsmCursor(msg)
   endif
 endfunc
 
-func s:PlaceAsmCursor(addr)
+func s:SelectAsmAddr(addr)
   let origw = win_getid()
-  if win_gotoid(s:sourcewin)
-    let lnum = search('^' . a:addr)
-    if lnum > 0
-      normal z.
-      let ns = nvim_create_namespace('TermDebugPC')
-      call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
-    endif
-    call win_gotoid(origw)
+  if !win_gotoid(s:sourcewin)
+    return v:false
   endif
+  if bufname() != s:asm_bufname
+    exe "e " . s:asm_bufname
+  endif
+  let lnum = search('^' . a:addr)
+  if lnum <= 0 || &ft != 'asm'
+    call win_gotoid(origw)
+    return v:false
+  endif
+
+  normal z.
+  let ns = nvim_create_namespace('TermDebugPC')
+  call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
+  let s:pcbuf = bufnr()
+  call win_gotoid(origw)
+  return v:true
 endfunc
 
 func s:ClearCursorSign()
@@ -567,7 +565,7 @@ func s:HandleDisassemble(...)
   if !exists('addr')
     let addr = asm_insns[0]['address']
   endif
-  call s:PlaceAsmCursor(addr)
+  call s:SelectAsmAddr(addr)
 endfunc
 
 func s:HandleError(msg)
