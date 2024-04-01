@@ -105,14 +105,38 @@ endfunc
 func TermDebugSendCommand(cmd)
   if !TermDebugIsStopped()
     echo "Cannot send command. Program is running."
+    return
+  endif
+
+  if type(a:cmd) == v:t_list
+    for command in a:cmd
+      call chansend(s:gdb_job_id, command . "\n")
+    endfor
   else
     call chansend(s:gdb_job_id, a:cmd . "\n")
   endif
 endfunc
 
 func TermDebugEvaluate(what)
-  let cmd = printf('%d-data-evaluate-expression "%s"', s:eval_token, a:what)
-  call chansend(s:comm_job_id, cmd . "\n")
+  let cmd = printf('-data-evaluate-expression "%s"', a:what)
+  call TermDebugSendMICommand(s:eval_token, cmd, function('s:HandleEvaluate'))
+endfunc
+
+func TermDebugToggleAsm()
+  let asm_mode = (s:pcbuf == bufnr(s:asm_bufname))
+  if asm_mode
+    " TODO
+  else
+    let origw = win_getid()
+    call TermDebugGoToSource()
+    let nr = bufnr(s:asm_bufname)
+    exe "b " . nr
+    let s:pcbuf = nr
+    " TODO position asm window
+    let cmd = "-data-disassemble -a $pc 0"
+    call TermDebugSendMICommand(s:disas_token, cmd, function('s:HandleDisassemble'))
+    call win_gotoid(origw)
+  endif
 endfunc
 
 func TermDebugBrToQf()
@@ -163,10 +187,13 @@ func TermDebugStart(...)
   " Names for created buffers
   const s:gdb_bufname = "Gdb terminal"
   const s:capture_bufname = "Gdb capture"
+  const s:asm_bufname = "Gdb disas"
   " Sync tokens
   const s:eval_token = 1
+  const s:disas_token = 2
   " Set defaults for required variables
   let s:breakpoints = #{}
+  let s:callbacks = #{}
   let s:pcbuf = -1
   let s:pid = 0
   let s:stopped = 1
@@ -176,17 +203,7 @@ func TermDebugStart(...)
     let s:host = a:1
   endif
 
-  if exists('g:termdebug_capture_msgs') && g:termdebug_capture_msgs
-    let nr = bufnr(s:capture_bufname)
-    if nr > 0
-      exe "bwipe! " . nr
-    endif
-    let nr = bufadd(s:capture_bufname)
-    call setbufvar(nr, "&buftype", "nofile")
-    call setbufvar(nr, "&swapfile", 0)
-    call setbufvar(nr, "&buflisted", 1)
-    call bufload(nr)
-  endif
+  call s:LoadSpecialBuffers()
 
   augroup TermDebug
     au BufRead * call s:BufRead()
@@ -292,6 +309,35 @@ func s:GdbOutput(job_id, msgs, event)
     endif
   endfor
 endfunc
+
+func s:LoadSpecialBuffers()
+  " Create capture buffer
+  if exists('g:termdebug_capture_msgs') && g:termdebug_capture_msgs
+    let nr = bufnr(s:capture_bufname)
+    if nr > 0
+      exe "bwipe! " . nr
+    endif
+    let nr = bufadd(s:capture_bufname)
+    call setbufvar(nr, "&buftype", "nofile")
+    call setbufvar(nr, "&swapfile", 0)
+    call setbufvar(nr, "&buflisted", 1)
+    call bufload(nr)
+  endif
+
+  " Create asm window
+  let nr = bufnr(s:asm_bufname)
+  if nr > 0
+    exe "bwipe! " . nr
+  endif
+  let nr = bufadd(s:asm_bufname)
+  call setbufvar(nr, "&buftype", "nofile")
+  call setbufvar(nr, "&swapfile", 0)
+  call setbufvar(nr, "&buflisted", 1)
+  call setbufvar(nr, "&wrap", 0)
+  call setbufvar(nr, "&number", 1)
+  call setbufvar(nr, "&modifiable", 1)
+  call setbufvar(nr, '&ft', 'asm')
+endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
@@ -308,10 +354,15 @@ func s:RecordHandler(msg)
     call s:HandleBreakpointDelete(a:msg)
   endif
 
-  let result = s:GetResultClass(a:msg)
   let token = s:GetResultToken(a:msg)
-  if result == 'done' && token == s:eval_token
-    call s:HandleEvaluate(a:msg)
+  if str2nr(token) > 0
+    let Callback = s:callbacks[token][0]
+    call remove(s:callbacks[token], 0)
+  endif
+
+  let result = s:GetResultClass(a:msg)
+  if result == 'done' && exists('Callback')
+    call Callback(a:msg)
   elseif result == 'error'
     call s:HandleError(a:msg)
   endif
@@ -327,14 +378,21 @@ func s:HandleCursor(msg)
     let s:stopped = 0
   endif
 
-  let ns = nvim_create_namespace('TermDebugPC')
-  if bufexists(s:pcbuf)
-    call nvim_buf_clear_namespace(s:pcbuf, ns, 0, -1)
-  end
+  call s:ClearCursorSign()
   if class == 'running'
     return
   endif
 
+  let asm_mode = (s:pcbuf == bufnr(s:asm_bufname))
+  if !asm_mode
+    call s:HandleSourceCursor(a:msg)
+  else
+    call s:HandleAsmCursor(a:msg)
+  endif
+endfunc
+
+func s:HandleSourceCursor(msg)
+  let ns = nvim_create_namespace('TermDebugPC')
   let filename = s:GetRecordVar(a:msg, 'fullname')
   let lnum = s:GetRecordVar(a:msg, 'line')
   if filereadable(filename) && str2nr(lnum) > 0
@@ -349,6 +407,40 @@ func s:HandleCursor(msg)
       let s:pcbuf = bufnr()
       call win_gotoid(origw)
     endif
+  endif
+endfunc
+
+func s:HandleAsmCursor(msg)
+  let addr = s:GetRecordVar(a:msg, 'addr')
+  let lines = getbufline(bufnr(s:asm_bufname), 1, '$')
+  let lnum = match(lines, '^' . addr)
+  if lnum > 0
+    call s:PlaceAsmCursor(addr)
+  else
+    " Reload disassembly
+    let cmd = printf("-data-disassemble -a %s 0", addr)
+    let Cb = function('s:HandleDisassemble', [addr])
+    call TermDebugSendMICommand(s:disas_token, cmd, Cb)
+  endif
+endfunc
+
+func s:PlaceAsmCursor(addr)
+  let origw = win_getid()
+  if win_gotoid(s:sourcewin)
+    let lnum = search('^' . a:addr)
+    if lnum > 0
+      normal z.
+      let ns = nvim_create_namespace('TermDebugPC')
+      call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
+    endif
+    call win_gotoid(origw)
+  endif
+endfunc
+
+func s:ClearCursorSign()
+  let ns = nvim_create_namespace('TermDebugPC')
+  if bufexists(s:pcbuf)
+    call nvim_buf_clear_namespace(s:pcbuf, ns, 0, -1)
   endif
 endfunc
 
@@ -444,9 +536,53 @@ func s:HandleEvaluate(msg)
   call v:lua.vim.lsp.util.open_floating_preview(lines)
 endfunc
 
+func s:HandleDisassemble(...)
+  if a:0 == 1
+    let msg = a:1
+  else
+    let addr = a:1
+    let msg = a:2
+  endif
+  let asm_insns = s:GetRecordDict(msg, 'asm_insns')
+
+  let nr = bufnr(s:asm_bufname)
+  call deletebufline(nr, 1, '$')
+  if empty(asm_insns)
+    call appendbufline(nr, "0", "No disassembler output")
+    return
+  endif
+
+  let intro = printf("Disassembly of %s:", asm_insns[0]['func-name'])
+  call appendbufline(nr, "0", intro)
+
+  for asm_ins in asm_insns
+    let address = asm_ins['address']
+    let offset = asm_ins['offset']
+    let inst = substitute(asm_ins['inst'], '\t', ' ', 'g')
+
+    let line = printf("%s<%d>: %s", address, offset, inst)
+    call appendbufline(nr, "$", line)
+  endfor
+
+  if !exists('addr')
+    let addr = asm_insns[0]['address']
+  endif
+  call s:PlaceAsmCursor(addr)
+endfunc
+
 func s:HandleError(msg)
   let err = s:GetRecordVar(a:msg, 'msg')
   echom err
+endfunc
+
+func TermDebugSendMICommand(token, cmd, Callback)
+  if !has_key(s:callbacks, a:token)
+    let s:callbacks[a:token] = []
+  endif
+  call add(s:callbacks[a:token], a:Callback)
+
+  let cmd = printf("%d%s", a:token, a:cmd)
+  call chansend(s:comm_job_id, cmd . "\n")
 endfunc
 
 func s:MatchGetCapture(string, pat)
@@ -494,10 +630,7 @@ func s:EndTermDebug(job_id, exit_code, event)
   silent! au! TermDebug
 
   " Clear signs
-  if bufexists(s:pcbuf)
-    let ns = nvim_create_namespace('TermDebugPC')
-    call nvim_buf_clear_namespace(s:pcbuf, ns, 0, -1)
-  endif
+  call s:ClearCursorSign()
   for id in keys(s:breakpoints)
     call s:ClearBreakpointSign(id)
   endfor
@@ -510,6 +643,10 @@ func s:EndTermDebug(job_id, exit_code, event)
   let gdb_buf = bufnr(s:gdb_bufname)
   if bufexists(gdb_buf)
     exe 'bwipe! ' . gdb_buf
+  endif
+  let asm_buf = bufnr(s:asm_bufname)
+  if bufexists(asm_buf)
+    exe 'bwipe! ' . asm_buf
   endif
 
   if exists('#User#TermDebugStopPost')
