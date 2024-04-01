@@ -323,7 +323,7 @@ func s:HandleCursor(msg)
   let class = s:GetAsyncClass(a:msg)
   if class == 'stopped'
     let s:stopped = 1
-  elseif class =~ 'running'
+  elseif class == 'running'
     let s:stopped = 0
   endif
 
@@ -331,22 +331,23 @@ func s:HandleCursor(msg)
   if bufexists(s:pcbuf)
     call nvim_buf_clear_namespace(s:pcbuf, ns, 0, -1)
   end
+  if class == 'running'
+    return
+  endif
 
-  if class == 'stopped' || class == 'thread-selected'
-    let filename = s:GetRecordVar(a:msg, 'fullname')
-    let lnum = s:GetRecordVar(a:msg, 'line')
-    if filereadable(filename) && str2nr(lnum) > 0
-      let origw = win_getid()
-      if win_gotoid(s:sourcewin)
-        if expand("%:p") != filename
-          exe "e " . fnameescape(filename)
-        endif
-        exe lnum
-        normal z.
-        call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
-        let s:pcbuf = bufnr()
-        call win_gotoid(origw)
+  let filename = s:GetRecordVar(a:msg, 'fullname')
+  let lnum = s:GetRecordVar(a:msg, 'line')
+  if filereadable(filename) && str2nr(lnum) > 0
+    let origw = win_getid()
+    if win_gotoid(s:sourcewin)
+      if expand("%:p") != filename
+        exe "e " . fnameescape(filename)
       endif
+      exe lnum
+      normal z.
+      call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
+      let s:pcbuf = bufnr()
+      call win_gotoid(origw)
     endif
   endif
 endfunc
