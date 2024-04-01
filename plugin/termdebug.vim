@@ -125,7 +125,11 @@ endfunc
 func TermDebugToggleAsm()
   let s:asm_mode = s:asm_mode ? 0 : 1
   call s:ClearCursorSign()
-  call TermDebugSendMICommand(s:frame_token, '-stack-info-frame', function('s:PlaceCursorSign'))
+  call TermDebugSendMICommand(s:frame_info_token, '-stack-info-frame', function('s:PlaceCursorSign'))
+endfunc
+
+func TermDebugFindSource()
+  call TermDebugSendMICommand(s:frame_list_token, '-stack-list-frames', function('s:HandleFrame'))
 endfunc
 
 func TermDebugBrToQf()
@@ -180,7 +184,8 @@ func TermDebugStart(...)
   " Sync tokens
   const s:eval_token = 1
   const s:disas_token = 2
-  const s:frame_token = 3
+  const s:frame_info_token = 3
+  const s:frame_list_token = 4
   " Set defaults for required variables
   let s:breakpoints = #{}
   let s:callbacks = #{}
@@ -532,6 +537,19 @@ func s:HandleEvaluate(msg)
   let value = s:GetRecordVar(a:msg, 'value')
   let lines = split(value, '\\n')
   call v:lua.vim.lsp.util.open_floating_preview(lines)
+endfunc
+
+func s:HandleFrame(msg)
+  " Handle [frame={}, frame={}, frame={}] lists
+  let msg = substitute(a:msg, ',frame=', ',', 'g')
+  let msg = substitute(msg, '[frame=', '[', 'g')
+  let frames = s:GetRecordDict(msg, 'stack')
+  for frame in frames
+    if has_key(frame, 'fullname') && filereadable(frame['fullname'])
+      call TermDebugSendCommand("frame " . frame['level'])
+      return
+    endif
+  endfor
 endfunc
 
 func s:HandleDisassemble(...)
