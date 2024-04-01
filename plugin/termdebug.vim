@@ -1,49 +1,7 @@
-" Debugger plugin using gdb.
-"
-" Author: Bram Moolenaar
-" Copyright: Vim license applies, see ":help license"
-" Last Change: 2021 Nov 27
-"
-" WORK IN PROGRESS - Only the basics work
-" Note: On MS-Windows you need a recent version of gdb.  The one included with
-" MingW is too old (7.6.1).
-" I used version 7.12 from http://www.equation.com/servlet/equation.cmd?fa=gdb
-"
-" There are two ways to run gdb:
-" - In a terminal window; used if possible, does not work on MS-Windows
-" - Prompt mode is deprecated, sorry MS-Windows
-"
-" For both the current window is used to view source code and shows the
-" current statement from gdb.
-"
-" USING A TERMINAL WINDOW
-"
-" Opens two visible terminal windows:
-" 1. runs a pty for the debugged program, as with ":term NONE"
-" 2. runs gdb, passing the pty of the debugged program
-" A third terminal window is hidden, it is used for communication with gdb.
-"
-" The communication with gdb uses GDB/MI.  See:
-" https://sourceware.org/gdb/current/onlinedocs/gdb/GDB_002fMI.html
-"
-" For neovim compatibility, the vim specific calls were replaced with neovim
-" specific calls:
-"   term_start -> term_open
-"   term_sendkeys -> chansend
-"   term_getline -> getbufline
-"   job_info && term_getjob -> using linux command ps to get the tty
-"   balloon -> nvim floating window
-"
-" The code for opening the floating window was taken from the beautiful
-" implementation of LanguageClient-Neovim:
-" https://github.com/autozimu/LanguageClient-neovim/blob/0ed9b69dca49c415390a8317b19149f97ae093fa/autoload/LanguageClient.vim#L304
-"
-" Neovim terminal also works seamlessly on windows, which is why the ability
-" Author: Bram Moolenaar
-" Copyright: Vim license applies, see ":help license"
+" vim: set sw=2 ts=2 sts=2 foldmethod=marker et:
 
 " In case this gets sourced twice.
-if exists(':Termdebug')
+if exists('*TermDebugStart')
   finish
 endif
 
@@ -52,179 +10,237 @@ if !exists('g:termdebugger')
   let g:termdebugger = 'gdb'
 endif
 
-let s:keepcpo = &cpo
-set cpo&vim
+" Highlights for sign column
+hi default link debugPC CursorLine
+hi default debugBreakpoint gui=reverse guibg=red
+hi default debugBreakpointDisabled gui=reverse guibg=gray
+
+""""""""""""""""""""""""""""""""""""Go to"""""""""""""""""""""""""""""""""""""{{{
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+func TermDebugGoToPC()
+  if bufexists(s:pcbuf)
+    exe "b " . s:pcbuf
+    let ns = nvim_create_namespace('TermDebugPC')
+    let pos = nvim_buf_get_extmarks(0, ns, 0, -1, #{})[0]
+    call cursor(pos[1] + 1, 0)
+  end
+endfunc
+
+func TermDebugGoToBreakpoint(...)
+  let id = get(a:000, 0, "")
+  " No argument supplied, load breakpoints into quickfix
+  if id == ""
+    call TermDebugBrToQf()
+    return
+  endif
+
+  if !has_key(s:breakpoints, id)
+    echo "No breakpoint " . id
+    return
+  endif
+
+  let breakpoint = s:breakpoints[id]
+  let lnum = breakpoint['lnum']
+  let fullname = breakpoint['fullname']
+  if expand("%:p") != fullname
+    exe "e " . fnameescape(fullname)
+  endif
+  call cursor(lnum, 0)
+endfunc
+
+func TermDebugGoToCapture()
+  let nr = bufnr(s:capture_bufname)
+  let wids = win_findbuf(nr)
+  if !empty(wids)
+    call win_gotoid(wids[0])
+  else
+    tabnew
+    exe "b " . nr
+  endif
+endfunc
+
+func TermDebugGoToSource()
+  if !win_gotoid(s:sourcewin)
+    below new
+    let s:sourcewin = win_getid(winnr())
+    call TermDebugGoToPC()
+  endif
+endfunc
+
+func TermDebugGoToGdb()
+  let nr = bufnr(s:gdb_bufname)
+  let wids = win_findbuf(nr)
+  if !empty(wids)
+    call win_gotoid(wids[0])
+  else
+    above new
+    exe "b " . nr
+  endif
+endfunc
+"}}}
 
 """""""""""""""""""""""""""""""Global functions"""""""""""""""""""""""""""""""{{{
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-func TermDebugStart()
-  call s:TermDebugStartCommon({})
+func TermDebugIsOpen()
+  if !exists('s:gdb_job_id')
+    return v:false
+  endif
+  silent! return jobpid(s:gdb_job_id) > 0
 endfunc
 
-func TermDebugStartSSH(ssh)
-  call s:TermDebugStartCommon({'ssh': a:ssh})
-endfunc
-
-function! TermDebugIsOpen()
-  return exists('s:gdbwin')
-endfunction
-
-function! TermDebugIsStopped()
-  if !exists("s:stopped")
-    return 1
+func TermDebugIsStopped()
+  if !TermDebugIsOpen()
+    return v:true
   endif
   return s:stopped
-endfunction
+endfunc
 
-function! TermDebugGetPid()
+func TermDebugGetPid()
+  if !TermDebugIsOpen()
+    return 0
+  endif
   return s:pid
-endfunction
-
-function! TermDebugGoToPC()
-  for signsData in sign_getplaced()
-    let signDebugPC = filter(signsData['signs'], {_, s -> s['name'] == "debugPC"})
-    if !empty(signDebugPC)
-      let lnum = signDebugPC[0]['lnum']
-      let bufnr = signsData['bufnr']
-      let col = getpos('.')[2]
-      exe "buffer " . bufnr
-      call cursor(lnum, col)
-      return
-    endif
-  endfor
 endfunc
 
 func TermDebugSendCommand(cmd)
   if !TermDebugIsStopped()
-    echoerr "Cannot send command '" . a:cmd . "'. Program is running."
-    return
-  endif
-  call chansend(s:gdb_job_id, a:cmd . "\r")
-endfunc
-
-func TermDebugSendMICommand(cmd)
-  call chansend(s:comm_job_id, a:cmd . "\r")
-endfunc
-
-func s:Compare(a, b)
-  let alen = len(a:a)
-  let blen = len(a:b)
-  if alen < blen
-    return -1
-  elseif blen < alen
-    return 1
-  elseif a:a < a:b
-    return -1
-  elseif a:b < a:a
-    return 1
+    echo "Cannot send command. Program is running."
   else
-    return 0
+    call chansend(s:gdb_job_id, a:cmd . "\n")
   endif
+endfunc
+
+func TermDebugEvaluate(what)
+  let cmd = printf('%d-data-evaluate-expression "%s"', s:eval_token, a:what)
+  call chansend(s:comm_job_id, cmd . "\n")
 endfunc
 
 func TermDebugBrToQf()
-  let brs = sort(items(s:breakpoints), {a, b -> <SID>Compare(a[0], b[0])})
-  let brs = filter(brs, {_, p -> ! has_key(p[1], 'pending')})
-  let items = map(brs, {_, i -> {
-        \ "filename": i[1]['fname'],
-        \ "lnum": i[1]['lnum'],
-        \ "col": 1,
-        \ "text": "Breakpoint " . i[0]
-        \ } })
+  let items = map(items(s:breakpoints), {_, item -> {
+        \ "text": "Breakpoint " . item[0],
+        \ "filename": item[1]['fullname'],
+        \ "lnum": item[1]['lnum']
+        \ }})
   if empty(items)
-    echoerr "No breakpoints to show"
-    return
+    echo "No breakpoints"
+  else
+    call setqflist([], ' ', {"title": "Breakpoints", "items": items})
+    copen
   endif
-  call setqflist([], ' ', {"title": "Breakpoints", "items": items})
-  copen
 endfunc
 
 func TermDebugQfToBr()
-	let items = getqflist()
-	for item in items
-		let fname = fnamemodify(bufname(item['bufnr']), ":p")
-		let lnum = item['lnum']
-		call TermDebugSendCommand("break " . fname . ":" . lnum)
-	endfor
-	cclose
+  for item in getqflist()
+    let fname = fnamemodify(bufname(item['bufnr']), ":p")
+    let lnum = item['lnum']
+    call TermDebugSendCommand("break " . fname . ":" . lnum)
+  endfor
+  cclose
 endfunc
 " }}}
 
-"""""""""""""""""""""""""""""""Variables to remove"""""""""""""""""""""""""""""""{{{
-"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-let s:pc_id = 12
-let s:asm_id = 13
-let s:break_id = 14  " breakpoint number is added to this
-
-let s:parsing_disasm_msg = 0
-let s:asm_lines = []
-let s:asm_addr = ''
-
-let g:comm_buf = ""
-"}}}
-
-"""""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""{{{
-"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-func s:TermDebugStartCommon(opts)
-  if exists('s:gdbwin')
-    echoerr 'Terminal debugger already running, cannot run two'
+""""""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""""{{{
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+func TermDebugStart(...)
+  if TermDebugIsOpen()
+    echo 'Terminal debugger already running, cannot run two'
     return
   endif
   if !executable(g:termdebugger)
-    echoerr 'Cannot execute debugger program "' .. g:termdebugger .. '"'
+    echo 'Cannot execute debugger program "' .. g:termdebugger .. '"'
     return
   endif
 
-  if exists('#User#TermdebugStartPre')
-    doauto <nomodeline> User TermdebugStartPre
+  if exists('#User#TermDebugStartPre')
+    doauto <nomodeline> User TermDebugStartPre
   endif
 
-  " Sign used to highlight the line where the program has stopped.
-  " There can be only one.
-  sign define debugPC linehl=debugPC
+  " Remove all prior variables
+  for varname in keys(s:)
+    exe "silent! unlet s:" . varname
+  endfor
+
+  " Names for created buffers
+  const s:gdb_bufname = "Gdb terminal"
+  const s:capture_bufname = "Gdb capture"
+  " Sync tokens
+  const s:eval_token = 1
+  " Set defaults for required variables
+  let s:breakpoints = #{}
+  let s:pcbuf = -1
+  let s:pid = 0
+  let s:stopped = 1
+  let s:sourcewin = win_getid()
+  let s:comm_buf = ""
+  if a:0 > 0
+    let s:host = a:1
+  endif
+
+  if exists('g:termdebug_capture_msgs') && g:termdebug_capture_msgs
+    let nr = bufnr(s:capture_bufname)
+    if nr > 0
+      exe "bwipe! " . nr
+    endif
+    let nr = bufadd(s:capture_bufname)
+    call setbufvar(nr, "&buftype", "nofile")
+    call setbufvar(nr, "&swapfile", 0)
+    call setbufvar(nr, "&buflisted", 1)
+    call bufload(nr)
+  endif
 
   augroup TermDebug
     au BufRead * call s:BufRead()
-    au OptionSet background call s:Highlight(0, v:option_old, v:option_new)
   augroup END
 
-  " Remember the old value of 'signcolumn' for each buffer that it's set in, so
-  " that we can restore the value for all buffers.
-  let b:save_signcolumn = &signcolumn
-  let s:signcolumn_buflist = [bufnr()]
-
-  " Contains breakpoints that have been placed, key is a string with the GDB
-  " breakpoint number.
-  let s:breakpoints = {}
-
-  let s:pid = 0
-  let s:asmwin = 0
-  let s:sourcewin = win_getid(winnr())
-
-  let s:gdb_startup_state = a:opts
-  call s:Launch()
-  call s:InstallCommands()
+  call s:LaunchComm()
 endfunc
 
-func s:Launch()
+func s:LaunchComm()
   " Create a hidden terminal window to communicate with gdb
   let comm_cmd = &shell
-  if has_key(s:gdb_startup_state, "ssh")
-    let comm_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:gdb_startup_state['ssh']]
+  if exists("s:host")
+    let comm_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:host]
   endif
-  let s:comm_job_id = jobstart(comm_cmd, {
-        \ 'on_stdout': function('s:CommJoin'),
-        \ 'pty': v:true,
-        \ })
+  let s:comm_job_id = jobstart(comm_cmd, #{on_stdout: function('s:CommJoin'), pty: v:true})
   if s:comm_job_id == 0
-    echoerr 'Invalid argument (or job table is full) while opening communication terminal window'
+    echo 'Invalid argument (or job table is full) while opening communication terminal window'
     return
   elseif s:comm_job_id == -1
-    echoerr 'Failed to open the communication terminal window'
+    echo 'Failed to open the communication terminal window'
     return
   endif
   call chansend(s:comm_job_id, "tty\r")
   call chansend(s:comm_job_id, "tail -f /dev/null\r")
+endfunc
+
+func s:CommJoin(job_id, msgs, event)
+  for msg in filter(a:msgs, "!empty(v:val)")
+    let s:comm_buf .= msg
+    if s:comm_buf[-1:] == "\r"
+      call s:CommOutput(s:comm_buf[0:-2])
+      let s:comm_buf = ""
+    endif
+  endfor
+endfunc
+
+func s:CommOutput(msg)
+  let bnr = bufnr(s:capture_bufname)
+  if bnr > 0
+    let newline = substitute(a:msg, "[^[:print:]]", "", "g")
+    call appendbufline(bnr, "$", newline)
+  endif
+
+  if !exists("s:comm_tty")
+    " Capture device name of communication terminal.
+    " The first command executed in the terminal will be "tty" and the output will be parsed here.
+    let tty = s:MatchGetCapture(a:msg, '\(' . '/dev/pts/[0-9]\+' . '\)')
+    if !empty(tty)
+      let s:comm_tty = tty
+      call s:LaunchGdb()
+    endif
+  else
+    call s:RecordHandler(a:msg)
+  endif
 endfunc
 
 func s:LaunchGdb()
@@ -238,643 +254,275 @@ func s:LaunchGdb()
   " target is running (so execute during startup).
   let gdb_cmd .= ' -iex "set mi-async on"'
   " Command executed _after_ startup is done
-  let gdb_cmd .= ' -ex "new-ui mi ' . s:gdb_startup_state['tty'] . '"'
+  let gdb_cmd .= ' -ex "new-ui mi ' . s:comm_tty . '"'
   " Launch GDB through ssh
-  if has_key(s:gdb_startup_state, "ssh")
-    let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:gdb_startup_state['ssh'], gdb_cmd]
+  if exists("s:host")
+    let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:host, gdb_cmd]
   endif
 
   execute 'new'
+  let s:gdbwin = win_getid(winnr())
   let s:gdb_job_id = termopen(gdb_cmd, {
-        \ 'on_exit': function('s:EndTermDebug'),
-        \ 'on_stdout': function('s:GdbOutput')
+        \ 'on_stdout': function('s:GdbOutput'),
+        \ 'on_exit': function('s:EndTermDebug')
         \ })
   if s:gdb_job_id == 0
-    echoerr 'Invalid argument (or job table is full) while opening gdb terminal window'
+    echo 'Invalid argument (or job table is full) while opening gdb terminal window'
     return
   elseif s:gdb_job_id == -1
-    echoerr 'Failed to open the gdb terminal window'
+    echo 'Failed to open the gdb terminal window'
     return
   endif
-  let gdb_job_info = nvim_get_chan_info(s:gdb_job_id)
-  let s:gdbbuf = gdb_job_info['buffer']
-  let s:gdbwin = win_getid(winnr())
 
   " Rename the terminal window
-  let name = "Gdb terminal"
-  let nr = bufnr(name)
-  if nr >= 0
+  let nr = bufnr(s:gdb_bufname)
+  if nr > 0
     exe "bwipe " . nr
   endif
-  exe "file " . name
-  " Set the filetype, this can be used to add mappings.
-  set filetype=termdebug
+  exe "file " . s:gdb_bufname
   startinsert
 endfunc
 
 func s:GdbOutput(job_id, msgs, event)
   for msg in a:msgs
     if msg =~ 'New UI allocated'
-      if exists('#User#TermdebugStartPost')
-        doauto <nomodeline> User TermdebugStartPost
+      if exists('#User#TermDebugStartPost')
+        doauto <nomodeline> User TermDebugStartPost
       endif
     endif
   endfor
-endfunc
-
-func s:CommJoin(job_id, msgs, event)
-  for msg in filter(a:msgs, "!empty(v:val)")
-    let g:comm_buf .= msg
-    if g:comm_buf[-1:] == "\r"
-      call s:CommOutput(g:comm_buf[0:-2])
-      let g:comm_buf = ""
-    endif
-  endfor
-endfunc
-
-func s:CommOutput(msg)
-  if exists("g:termdebug_capture_msgs") && g:termdebug_capture_msgs
-    let capture_buf = s:GetMessagesBuf()
-    let m = substitute(a:msg, "[^[:print:]]", "", "g")
-    call appendbufline(capture_buf, "$", m)
-  endif
-
-  if !has_key(s:gdb_startup_state, "tty")
-    " Capture device name of communication terminal.
-    " The first command executed in the terminal will be "tty" and the output will be parsed here.
-    let pty = s:MatchGetCapture(a:msg, '\(' . '/dev/pts/[0-9]\+' . '\)')
-    if pty != ""
-      let s:gdb_startup_state["tty"] = pty
-      call s:LaunchGdb()
-    endif
-  elseif s:parsing_disasm_msg
-    call s:HandleDisasmMsg(a:msg)
-  elseif a:msg != ''
-    if a:msg =~ '^\(\*stopped\|\*running\|=thread-selected\)'
-      call s:HandleCursor(a:msg)
-    elseif a:msg =~ '^\^done,bkpt=' || a:msg =~ '^=breakpoint-created,' || a:msg =~ '^=breakpoint-modified,'
-      call s:HandleNewBreakpoint(a:msg)
-    elseif a:msg =~ '^=breakpoint-deleted,'
-      call s:HandleBreakpointDelete(a:msg)
-    elseif a:msg =~ '^=thread-group-started'
-      call s:HandleProgramRun(a:msg)
-    elseif a:msg =~ '^\^done,value='
-      call s:HandleEvaluate(a:msg)
-    elseif a:msg =~ '^\^error,msg='
-      call s:HandleError(a:msg)
-    elseif a:msg =~ '^disassemble'
-      let s:parsing_disasm_msg = 1
-      let s:asm_lines = []
-    endif
-  endif
-endfunc
-
-func s:GetMessagesBuf()
-  if !exists("g:termdebug_capture_msgs") || !g:termdebug_capture_msgs
-    return -1
-  endif
-
-  let bufname = "Gdb messages"
-  let capture_buf = bufadd(bufname)
-  call setbufvar(capture_buf, "&buftype", "nofile")
-  call setbufvar(capture_buf, "&swapfile", 0)
-  call setbufvar(capture_buf, "&buflisted", 1)
-  call bufload(capture_buf)
-  return capture_buf
-endfunc
-
-" Install commands in the current window to control the debugger.
-func s:InstallCommands()
-  let save_cpo = &cpo
-  set cpo&vim
-
-  command! Capture call s:GotoCaptureOrCreateIt()
-  command! Gdb call s:GotoGdbwinOrCreateIt()
-  command! Source call s:GotoSourcewinOrCreateIt()
-  command! Asm call s:GotoAsmwinOrCreateIt()
-  command! -nargs=? Break call s:GoToBreakpoint(<q-args>)
-
-  let &cpo = save_cpo
 endfunc
 " }}}
 
-"""""""""""""""""""""""""""""""Ending the session"""""""""""""""""""""""""""""""{{{
-""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-function s:EndTermDebug(job_id, exit_code, event)
-  if exists('#User#TermdebugStopPre')
-    doauto <nomodeline> User TermdebugStopPre
+""""""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
+
+func s:RecordHandler(msg)
+  let async = s:GetAsyncClass(a:msg)
+  if async == "stopped" || async == "running" || async == "thread-selected"
+    call s:HandleCursor(a:msg)
+  elseif async == "thread-group-started"
+    call s:HandleProgramRun(a:msg)
+  elseif async == 'breakpoint-created' || async == 'breakpoint-modified'
+    call s:HandleNewBreakpoint(a:msg)
+  elseif async == 'breakpoint-deleted'
+    call s:HandleBreakpointDelete(a:msg)
   endif
 
-  unlet s:gdb_startup_state
-  unlet s:gdbwin
-
-  call s:EndDebugCommon()
-endfunc
-
-func s:EndDebugCommon()
-  let curwinid = win_getid(winnr())
-
-  let msgbuf = bufnr("Gdb messages")
-  if msgbuf >= 0
-    exe 'bwipe!' . msgbuf
-  endif
-
-  let capturebuf = s:GetMessagesBuf()
-  if capturebuf >= 0
-    exe 'bwipe!' . capturebuf
-  endif
-
-  if exists("s:stopped")
-    unlet s:stopped
-  endif
-
-  if exists('s:gdbbuf') && s:gdbbuf
-    exe 'bwipe! ' . s:gdbbuf
-  endif
-
-  let asmbuf = bufnr('Termdebug-asm-listing')
-  if asmbuf > 0
-    exe 'bwipe! ' . asmbuf
-  endif
-
-  " Restore 'signcolumn' in all buffers for which it was set.
-  call win_gotoid(s:sourcewin)
-  let was_buf = bufnr()
-  for bufnr in s:signcolumn_buflist
-    if bufexists(bufnr)
-      exe bufnr .. "buf"
-      if exists('b:save_signcolumn')
-        let &signcolumn = b:save_signcolumn
-        unlet b:save_signcolumn
-      endif
-    endif
-  endfor
-  exe was_buf .. "buf"
-
-  call s:DeleteCommands()
-
-  call win_gotoid(curwinid)
-
-  if exists('#User#TermdebugStopPost')
-    doauto <nomodeline> User TermdebugStopPost
-  endif
-
-  au! TermDebug
-endfunc
-
-" Delete installed debugger commands in the current window.
-func s:DeleteCommands()
-  delcommand Capture
-  delcommand Gdb
-  delcommand Source
-  delcommand Asm
-  delcommand Break
-
-  exe 'sign unplace ' . s:pc_id
-  sign undefine debugPC
-
-  for [id, entry] in items(s:breakpoints)
-    exe 'sign unplace ' . s:Breakpoint2SignNumber(id)
-    if !has_key(entry, 'pending')
-      exe "sign undefine debugBreakpoint" . id
-    endif
-  endfor
-
-  unlet s:breakpoints
-endfunc
-" }}}
-
-"""""""""""""""""""""""""""""""Message handlers"""""""""""""""""""""""""""""""{{{
-""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-
-" Decode a message from gdb.  quotedText starts with a ", return the text up
-" to the next ", unescaping characters:
-" - remove line breaks
-" - change \\t to \t
-" - change \0xhh to \xhh
-" - change \ooo to octal
-" - change \\ to \
-func s:DecodeMessage(quotedText)
-  if a:quotedText[0] != '"'
-    echoerr 'DecodeMessage(): missing quote in ' . a:quotedText
-    return
-  endif
-  return a:quotedText
-        \->substitute('^"\|".*\|\\n', '', 'g')
-        \->substitute('\\t', "\t", 'g')
-        \->substitute('\\0x\(\x\x\)', {-> eval('"\x' .. submatch(1) .. '"')}, 'g')
-        \->substitute('\\\o\o\o', {-> eval('"' .. submatch(0) .. '"')}, 'g')
-        \->substitute('\\\\', '\', 'g')
-endfunc
-
-" Extract the "name" value from a gdb message with fullname="name".
-func s:GetFullname(msg)
-  if a:msg !~ 'fullname'
-    return ''
-  endif
-  let name = s:DecodeMessage(substitute(a:msg, '.*fullname=', '', ''))
-  if has('win32') && name =~ ':\\\\'
-    " sometimes the name arrives double-escaped
-    let name = substitute(name, '\\\\', '\\', 'g')
-  endif
-  return name
-endfunc
-
-" Extract the "addr" value from a gdb message with addr="0x0001234".
-func s:GetAsmAddr(msg)
-  if a:msg !~ 'addr='
-    return ''
-  endif
-  let addr = s:DecodeMessage(substitute(a:msg, '.*addr=', '', ''))
-  return addr
-endfunc
-
-" Send a command to gdb.  "cmd" is the string without line terminator.
-func s:SendCommand(cmd)
-  call chansend(s:comm_job_id, a:cmd . "\r")
-endfunc
-
-" - CommOutput: disassemble $pc
-" - CommOutput: &"disassemble $pc\n"
-" - CommOutput: ~"Dump of assembler code for function main(int, char**):\n"
-" - CommOutput: ~"   0x0000555556466f69 <+0>:\tpush   rbp\n"
-" ...
-" - CommOutput: ~"   0x0000555556467cd0:\tpop    rbp\n"
-" - CommOutput: ~"   0x0000555556467cd1:\tret    \n"
-" - CommOutput: ~"End of assembler dump.\n"
-" - CommOutput: ^done
-
-" - CommOutput: disassemble $pc
-" - CommOutput: &"disassemble $pc\n"
-" - CommOutput: &"No function contains specified address.\n"
-" - CommOutput: ^error,msg="No function contains specified address."
-func s:HandleDisasmMsg(msg)
-  if a:msg =~ '^\^done'
-    let curwinid = win_getid(winnr())
-    if win_gotoid(s:asmwin)
-      silent normal! gg0"_dG
-      call setline(1, s:asm_lines)
-      set nomodified
-      set filetype=asm
-
-      let lnum = search('^' . s:asm_addr)
-      if lnum != 0
-        exe 'sign unplace ' . s:asm_id
-        exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
-        exe 'normal ' . lnum . 'z.'
-      endif
-
-      call win_gotoid(curwinid)
-    endif
-
-    let s:parsing_disasm_msg = 0
-    let s:asm_lines = []
-  elseif a:msg =~ '^\^error,msg='
-    if s:parsing_disasm_msg == 1
-      " Disassemble call ran into an error. This can happen when gdb can't
-      " find the function frame address, so let's try to disassemble starting
-      " at current PC
-      call s:SendCommand('disassemble $pc,+100')
-    endif
-    let s:parsing_disasm_msg = 0
-  elseif a:msg =~ '\&\"disassemble \$pc'
-    if a:msg =~ '+100'
-      " This is our second disasm attempt
-      let s:parsing_disasm_msg = 2
-    endif
-  else
-    let value = substitute(a:msg, '^\~\"[ ]*', '', '')
-    let value = substitute(value, '^=>[ ]*', '', '')
-    let value = substitute(value, '\\n\"\r$', '', '')
-    let value = substitute(value, '\r', '', '')
-    let value = substitute(value, '\\t', ' ', 'g')
-
-    if value != '' || !empty(s:asm_lines)
-      call add(s:asm_lines, value)
-    endif
+  let result = s:GetResultClass(a:msg)
+  let token = s:GetResultToken(a:msg)
+  if result == 'done' && token == s:eval_token
+    call s:HandleEvaluate(a:msg)
+  elseif result == 'error'
+    call s:HandleError(a:msg)
   endif
 endfunc
 
 " Handle stopping and running message from gdb.
 " Will update the sign that shows the current position.
 func s:HandleCursor(msg)
-  let wid = win_getid(winnr())
-
-  if a:msg =~ '^\*stopped'
+  let class = s:GetAsyncClass(a:msg)
+  if class == 'stopped'
     let s:stopped = 1
-  elseif a:msg =~ '^\*running,thread-id="all"'
+  elseif class =~ 'running'
     let s:stopped = 0
   endif
 
-  if a:msg =~ 'fullname='
-    let fname = s:GetFullname(a:msg)
-  else
-    let fname = ''
-  endif
+  let ns = nvim_create_namespace('TermDebugPC')
+  if bufexists(s:pcbuf)
+    call nvim_buf_clear_namespace(s:pcbuf, ns, 0, -1)
+  end
 
-  if a:msg =~ 'addr='
-    let asm_addr = s:GetAsmAddr(a:msg)
-    if asm_addr != ''
-      let s:asm_addr = asm_addr
-
-      let curwinid = win_getid(winnr())
-      if win_gotoid(s:asmwin)
-      let lnum = search('^' . s:asm_addr)
-      if lnum == 0
-        call s:SendCommand('disassemble $pc')
-      else
-        exe 'sign unplace ' . s:asm_id
-        exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
-        exe 'normal ' . lnum . 'z.'
-      endif
-
-      call win_gotoid(curwinid)
+  if class == 'stopped' || class == 'thread-selected'
+    let filename = s:GetRecordVar(a:msg, 'fullname')
+    let lnum = s:GetRecordVar(a:msg, 'line')
+    if filereadable(filename) && str2nr(lnum) > 0
+      let origw = win_getid()
+      if win_gotoid(s:sourcewin)
+        if expand("%:p") != filename
+          exe "e " . fnameescape(filename)
+        endif
+        exe lnum
+        normal z.
+        call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
+        let s:pcbuf = bufnr()
+        call win_gotoid(origw)
       endif
     endif
-  endif
-
-  if a:msg =~ '^\(\*stopped\|=thread-selected\)' && filereadable(fname)
-    let lnum = s:MatchGetCapture(a:msg, 'line="\([^"]*\)"')
-    if lnum =~ '^[0-9]*$'
-      call s:GotoSourcewinOrCreateIt()
-      if expand('%:p') != fnamemodify(fname, ':p')
-        exe 'edit ' . fnameescape(fname)
-      endif
-      exe lnum
-      normal! zv
-      exe 'sign unplace ' . s:pc_id
-      exe 'sign place ' . s:pc_id . ' line=' . lnum . ' name=debugPC file=' . fname
-      exe 'normal ' . lnum . 'z.'
-      if !exists('b:save_signcolumn')
-        let b:save_signcolumn = &signcolumn
-        call add(s:signcolumn_buflist, bufnr())
-      endif
-      setlocal signcolumn=yes
-    endif
-  elseif !TermDebugIsStopped() || fname != ''
-    exe 'sign unplace ' . s:pc_id
-  endif
-
-  call win_gotoid(wid)
-endfunc
-
-" Handle setting a breakpoint
-" Will update the sign that shows the breakpoint
-func s:HandleNewBreakpoint(msg)
-  if a:msg !~ 'fullname='
-    " A watch or a pending breakpoint does not have a file name
-    if a:msg =~ 'pending='
-      let nr = s:MatchGetCapture(a:msg, 'number=\"\([0-9.]*\)\"')
-      let target = s:MatchGetCapture(a:msg, 'pending=\"\([^"]*\)\"')
-      " Mark breakpoint as pending.
-      let entry = {'pending': 1}
-      let s:breakpoints[nr] = entry
-      echomsg 'Breakpoint ' . nr . ' (' . target  . ') pending.'
-    endif
-    return
-  endif
-  for msg in split(a:msg, '{.\{-}}\zs')
-    let fname = s:GetFullname(msg)
-    let id = s:MatchGetCapture(msg, 'number="\([0-9]*\)[."]')
-    let enabled = tolower(s:MatchGetCapture(msg, 'enabled="\([ynN]\)"'))
-    let addr = s:MatchGetCapture(msg, 'addr="\([^"]*\)"')
-    let lnum = s:MatchGetCapture(msg, 'line="\([^"]*\)"')
-
-    if empty(id)
-      continue
-    endif
-    " Breakpoint might move to a new location (via breakpoint-modified)
-    " Remove previous sign
-    exe 'sign unplace ' . s:Breakpoint2SignNumber(id)
-
-    " Handle multi breakpoint
-    if has_key(s:breakpoints, id)
-      let entry = s:breakpoints[id]
-    else
-      let entry = {}
-      let s:breakpoints[id] = entry
-    endif
-
-    if addr == "<MULTIPLE>"
-      let entry['multiple'] = 1
-      let entry['enabled'] = enabled
-    endif
-
-    if empty(fname) || empty(lnum)
-      continue
-    endif
-
-    let entry['fname'] = fname
-    let entry['lnum'] = lnum
-    " For multi breakpoints, look at enable state of main breakpoint (e.g. "9" instead of "9.1")
-    if !has_key(entry, 'multiple')
-      let entry['enabled'] = enabled
-    endif
-
-    call s:DefineBreakpointSign(id)
-    if bufloaded(fname)
-      call s:PlaceBreakpointSign(id, entry)
-    endif
-
-    let wasPending = has_key(entry, "pending")
-    if wasPending
-      unlet entry["pending"]
-      echomsg 'Pending breakpoint ' . id . ' loaded'
-    endif
-  endfor
-endfunc
-
-" Handle deleting a breakpoint
-" Will remove the sign that shows the breakpoint
-func s:HandleBreakpointDelete(msg)
-  let id = s:MatchGetCapture(a:msg, 'id="\([0-9]*\)\"')
-  if empty(id)
-    return
-  endif
-  if has_key(s:breakpoints, id)
-    let entry = s:breakpoints[id]
-    exe 'sign unplace ' . s:Breakpoint2SignNumber(id)
-    unlet s:breakpoints[id]
-    echomsg 'Breakpoint ' . id . ' cleared.'
   endif
 endfunc
 
 " Handle the debugged program starting to run.
 " Will store the process ID in s:pid
 func s:HandleProgramRun(msg)
-  let nr = s:MatchGetCapture(a:msg, 'pid="\([0-9]*\)\"') + 0
-  if nr == 0
+  let nr = str2nr(s:GetRecordVar(a:msg, 'pid'))
+  if nr > 0
+    let s:pid = nr
+    if exists('#User#TermDebugRunPost')
+      doauto <nomodeline> User TermDebugRunPost
+    endif
+  endif
+endfunc
+
+" Handle setting a breakpoint
+" Will update the sign that shows the breakpoint
+func s:HandleNewBreakpoint(msg)
+  let bkpt = s:GetRecordDict(a:msg, 'bkpt')
+
+  if has_key(bkpt, 'pending') && has_key(bkpt, 'number')
+    echomsg 'Breakpoint ' . bkpt['number'] . ' (' . bkpt['pending']  . ') pending.'
     return
   endif
-  let s:pid = nr
-  if exists('#User#TermdebugPidPost')
-    doauto <nomodeline> User TermdebugPidPost
+
+  let id = bkpt['number']
+  call s:ClearBreakpointSign(id)
+
+  if has_key(bkpt, 'fullname')
+    let s:breakpoints[id] = #{
+          \ fullname: bkpt['fullname'],
+          \ lnum: bkpt['line'],
+          \ enabled: bkpt['enabled'] == 'y'
+          \ }
+    call s:PlaceBreakpointSign(id)
+  elseif bkpt['addr'] == '<MULTIPLE>'
+    for location in bkpt['locations']
+      let id = location['number']
+      call s:ClearBreakpointSign(id)
+      let s:breakpoints[id] = #{
+            \ fullname: location['fullname'],
+            \ lnum: location['line'],
+            \ enabled: location['enabled'] == 'y' && bkpt['enabled'] == 'y'
+            \ }
+      call s:PlaceBreakpointSign(id)
+    endfor
   endif
 endfunc
 
-" Handle an error.
-func s:HandleError(msg)
-  let msgVal = s:MatchGetCapture(a:msg, 'msg="\([^"]*\)"')
-  echoerr substitute(msgVal, '\\"', '"', 'g')
+" Handle deleting a breakpoint
+" Will remove the sign that shows the breakpoint
+func s:HandleBreakpointDelete(msg)
+  let id = s:GetRecordVar(a:msg, 'id')
+  call s:ClearBreakpointSign(id)
 endfunc
 
-function s:MatchGetCapture(string, pat)
+func s:ClearBreakpointSign(id)
+  if has_key(s:breakpoints, a:id)
+    let breakpoint = s:breakpoints[a:id]
+    if has_key(breakpoint, "extmark")
+      let extmark = breakpoint['extmark']
+      let bufnr = bufnr(breakpoint['fullname'])
+      if bufnr > 0
+        let ns = nvim_create_namespace('TermDebugBr')
+        call nvim_buf_del_extmark(bufnr, ns, extmark)
+      endif
+    endif
+  endif
+endfunc
+
+func s:PlaceBreakpointSign(id)
+  if has_key(s:breakpoints, a:id)
+    let breakpoint = s:breakpoints[a:id]
+    let bufnr = bufnr(breakpoint['fullname'])
+    let placed = has_key(breakpoint, 'extmark')
+    if bufnr > 0 && !placed
+      let ns = nvim_create_namespace('TermDebugBr')
+      let text = len(a:id) <= 2 ? a:id : "*"
+      let hl_group = breakpoint['enabled'] ? 'debugBreakpoint' : 'debugBreakpointDisabled'
+      let opts = #{sign_text: text, sign_hl_group: hl_group}
+      let extmark = nvim_buf_set_extmark(bufnr, ns, breakpoint['lnum'] - 1, 0, opts)
+      let s:breakpoints[a:id]['extmark'] = extmark
+    endif
+  endif
+endfunc
+" }}}
+
+"""""""""""""""""""""""""""""""Utility handlers"""""""""""""""""""""""""""""""{{{
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+func s:HandleEvaluate(msg)
+  let value = s:GetRecordVar(a:msg, 'value')
+  let lines = split(value, '\\n')
+  call v:lua.vim.lsp.util.open_floating_preview(lines)
+endfunc
+
+func s:HandleError(msg)
+  let err = s:GetRecordVar(a:msg, 'msg')
+  echom err
+endfunc
+
+func s:MatchGetCapture(string, pat)
   let res = matchlist(a:string, a:pat)
   if empty(res)
     return ""
   endif
   return res[1]
-endfunction
+endfunc
+
+func s:GetRecordVar(msg, var_name)
+  let regex = printf('%s="\([^"]*\)"', a:var_name)
+  let msg = substitute(a:msg, '\\"', "'", "g")
+  return s:MatchGetCapture(msg, regex)
+endfunc
+
+func s:GetRecordDict(msg, var_name)
+  let start = matchend(a:msg, a:var_name . '=')
+  let msg = a:msg[start:]
+  let msg = substitute(msg, '=', ':', 'g')
+  let msg = substitute(msg, '{', '#{', 'g')
+  return eval(msg)
+endfunc
+
+func s:GetAsyncClass(msg)
+  return s:MatchGetCapture(a:msg, '^[0-9]*[*+=]\([^,]*\),\?')
+endfunc
+
+func s:GetResultToken(msg)
+  return s:MatchGetCapture(a:msg, '^\([0-9]\+\)\^')
+endfunc
+
+func s:GetResultClass(msg)
+  return s:MatchGetCapture(a:msg, '^[0-9]*\^\([^,]*\),\?')
+endfunc
 "}}}
 
-"""""""""""""""""""""""""""""""Go to win or create it"""""""""""""""""""""""""""""""{{{
-""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-func s:GotoCaptureOrCreateIt()
-  if !exists("g:termdebug_capture_msgs")
-    echoerr "Need to set g:termdebug_capture_msgs to 1"
-    return
-  endif
-
-  if !exists("s:capturewin") || !win_gotoid(s:capturewin)
-    tabnew
-    exe "b " . s:GetMessagesBuf()
-    let s:capturewin = win_getid(winnr())
-  endif
-endfunc
-
-func s:GotoSourcewinOrCreateIt()
-  if !win_gotoid(s:sourcewin)
-    below new
-    let s:sourcewin = win_getid(winnr())
-    call TermDebugGoToPC()
-  endif
-endfunc
-
-func s:GotoGdbwinOrCreateIt()
-  if !win_gotoid(s:gdbwin)
-    above new
-    let s:gdbwin = win_getid(winnr())
-    exe "b " . s:gdbbuf
-  endif
-endfunc
-
-func s:GotoAsmwinOrCreateIt()
-  if !win_gotoid(s:asmwin)
-    if win_gotoid(s:sourcewin)
-      exe 'rightbelow new'
-    else
-      exe 'new'
-    endif
-
-    let s:asmwin = win_getid(winnr())
-
-    setlocal nowrap
-    setlocal number
-    setlocal noswapfile
-    setlocal buftype=nofile
-    setlocal modifiable
-
-    let asmbuf = bufnr('Termdebug-asm-listing')
-    if asmbuf > 0
-      exe 'buffer' . asmbuf
-    else
-      exe 'file Termdebug-asm-listing'
-    endif
-  endif
-
-  if s:asm_addr != ''
-    let lnum = search('^' . s:asm_addr)
-    if lnum == 0
-      if TermDebugIsStopped()
-        call s:SendCommand('disassemble $pc')
-      endif
-    else
-      exe 'sign unplace ' . s:asm_id
-      exe 'sign place ' . s:asm_id . ' line=' . lnum . ' name=debugPC'
-      exe 'normal ' . lnum . 'z.'
-    endif
-  endif
-endfunc
-" }}}
-
-"""""""""""""""""""""""""""""""Breakpoint signs"""""""""""""""""""""""""""""""{{{
+""""""""""""""""""""""""""""""Ending the session""""""""""""""""""""""""""""""{{{
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-func s:Highlight(init, old, new)
-  let default = a:init ? 'default ' : ''
-  if a:new ==# 'light' && a:old !=# 'light'
-    exe "hi " . default . "debugPC term=reverse ctermbg=lightblue guibg=lightblue"
-  elseif a:new ==# 'dark' && a:old !=# 'dark'
-    exe "hi " . default . "debugPC term=reverse ctermbg=darkblue guibg=darkblue"
+func s:EndTermDebug(job_id, exit_code, event)
+  if exists('#User#TermDebugStopPre')
+    doauto <nomodeline> User TermDebugStopPre
+  endif
+
+  silent! au! TermDebug
+
+  " Clear signs
+  if bufexists(s:pcbuf)
+    let ns = nvim_create_namespace('TermDebugPC')
+    call nvim_buf_clear_namespace(s:pcbuf, ns, 0, -1)
+  endif
+  for id in keys(s:breakpoints)
+    call s:ClearBreakpointSign(id)
+  endfor
+
+  " Clear buffers
+  let capture_buf = bufnr(s:capture_bufname)
+  if capture_buf >= 0
+    exe 'bwipe!' . capture_buf
+  endif
+  let gdb_buf = bufnr(s:gdb_bufname)
+  if bufexists(gdb_buf)
+    exe 'bwipe! ' . gdb_buf
+  endif
+
+  if exists('#User#TermDebugStopPost')
+    doauto <nomodeline> User TermDebugStopPost
   endif
 endfunc
 
-call s:Highlight(1, '', &background)
-hi default debugBreakpoint gui=reverse guibg=red
-hi default debugBreakpointDisabled gui=reverse guibg=gray
-
-" Take a breakpoint number as used by GDB and turn it into an integer.
-func s:Breakpoint2SignNumber(id)
-  return s:break_id + a:id
-endfunction
-
-func s:DefineBreakpointSign(id)
-  let enabled = s:breakpoints[a:id]["enabled"]
-  let nr = printf('%d', a:id)
-  if enabled == "n"
-    let hiName = "debugBreakpointDisabled"
-  else
-    let hiName = "debugBreakpoint"
-  endif
-  let signText = substitute(nr, '\..*', '', '')
-  if len(signText) > 2
-    let signText = "*"
-  end
-  exe "sign define debugBreakpoint" . nr . " text=" . signText . " texthl=" . hiName
-endfunc
-
-func! s:GoToBreakpoint(id)
-  " No argument supplied, load breakpoints into quickfix
-  if a:id == ""
-    call TermDebugBrToQf()
-    return
-  endif
-
-  if !has_key(s:breakpoints, a:id)
-    echoerr "No entry for breakpoint " . a:id
-    return
-  endif
-
-  let entry = s:breakpoints[a:id]
-  if has_key(entry, "pending")
-    echoerr "Cannot go to pending breakpoint " . a:id
-    return
-  endif
-
-  let lnum = entry['lnum']
-  let fname = entry['fname']
-  if expand("%:p") != fname
-    exe "edit " . fnameescape(fname)
-  endif
-  call cursor(lnum, 0)
-endfunc
-
-func s:PlaceBreakpointSign(id, entry)
-  let nr = printf('%d', a:id)
-  exe 'sign place ' . s:Breakpoint2SignNumber(a:id) . ' line=' . a:entry['lnum'] . ' name=debugBreakpoint' . nr . ' priority=110 file=' . a:entry['fname']
-endfunc
-
-" Handle a BufRead autocommand event: place any signs.
+" Handle a BufRead autocommand event: place breakpoint signs.
 func s:BufRead()
-  let fname = expand('<afile>:p')
-  for [id, entry] in items(s:breakpoints)
-    if has_key(entry, 'fname') && entry['fname'] == fname
-      call s:PlaceBreakpointSign(id, entry)
+  let fullname = expand('<afile>:p')
+  for [key, breakpoint] in items(s:breakpoints)
+    if breakpoint['fullname'] == fullname
+      call s:PlaceBreakpointSign(key)
     endif
   endfor
 endfunc
 " }}}
-
-let &cpo = s:keepcpo
-unlet s:keepcpo
-
-" vim: set sw=2 ts=2 sts=2 foldmethod=marker et:
