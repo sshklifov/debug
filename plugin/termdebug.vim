@@ -60,7 +60,6 @@ func TermDebugGoToSource()
   if !win_gotoid(s:sourcewin)
     below new
     let s:sourcewin = win_getid(winnr())
-    call TermDebugGoToPC()
   endif
 endfunc
 
@@ -133,7 +132,7 @@ func TermDebugToggleAsm()
   call TermDebugSendMICommand(s:frame_info_token, '-stack-info-frame', function('s:PlaceCursorSign'))
 endfunc
 
-func TermDebugFindSource()
+func TermDebugGoUp()
   call TermDebugSendMICommand(s:frame_list_token, '-stack-list-frames', function('s:HandleFrame'))
 endfunc
 
@@ -400,16 +399,15 @@ func s:PlaceSourceCursor(msg)
   let lnum = s:GetRecordVar(a:msg, 'line')
   if filereadable(filename) && str2nr(lnum) > 0
     let origw = win_getid()
-    if win_gotoid(s:sourcewin)
-      if expand("%:p") != filename
-        exe "e " . fnameescape(filename)
-      endif
-      exe lnum
-      normal z.
-      call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
-      let s:pcbuf = bufnr()
-      call win_gotoid(origw)
+    call TermDebugGoToSource()
+    if expand("%:p") != filename
+      exe "e " . fnameescape(filename)
     endif
+    exe lnum
+    normal z.
+    call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
+    let s:pcbuf = bufnr()
+    call win_gotoid(origw)
   endif
 endfunc
 
@@ -425,24 +423,22 @@ endfunc
 
 func s:SelectAsmAddr(addr)
   let origw = win_getid()
-  if !win_gotoid(s:sourcewin)
-    return v:false
-  endif
+  call TermDebugGoToSource()
   if bufname() != s:asm_bufname
     exe "e " . s:asm_bufname
   endif
+
   let lnum = search('^' . a:addr)
-  if lnum <= 0 || &ft != 'asm'
+  if lnum > 0
+    normal z.
+    let ns = nvim_create_namespace('TermDebugPC')
+    call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
+    let s:pcbuf = bufnr()
     call win_gotoid(origw)
-    return v:false
   endif
 
-  normal z.
-  let ns = nvim_create_namespace('TermDebugPC')
-  call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
-  let s:pcbuf = bufnr()
   call win_gotoid(origw)
-  return v:true
+  return lnum > 0
 endfunc
 
 func s:ClearCursorSign()
@@ -564,14 +560,8 @@ func s:HandleInterrupt(cmd, msg)
   call chansend(s:gdb_job_id, a:cmd . "\n")
 endfunc
 
-func s:HandleDisassemble(...)
-  if a:0 == 1
-    let msg = a:1
-  else
-    let addr = a:1
-    let msg = a:2
-  endif
-  let asm_insns = s:GetRecordDict(msg, 'asm_insns')
+func s:HandleDisassemble(addr, msg)
+  let asm_insns = s:GetRecordDict(a:msg, 'asm_insns')
 
   let nr = bufnr(s:asm_bufname)
   call deletebufline(nr, 1, '$')
@@ -591,11 +581,7 @@ func s:HandleDisassemble(...)
     let line = printf("%s<%d>: %s", address, offset, inst)
     call appendbufline(nr, "$", line)
   endfor
-
-  if !exists('addr')
-    let addr = asm_insns[0]['address']
-  endif
-  call s:SelectAsmAddr(addr)
+  call s:SelectAsmAddr(a:addr)
 endfunc
 
 func s:HandleStream(msg)
