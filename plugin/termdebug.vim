@@ -48,15 +48,12 @@ func TermDebugGoToBreakpoint(...)
   call cursor(lnum, 0)
 endfunc
 
-func TermDebugGoToCapture()
-  let nr = bufnr(s:capture_bufname)
-  let wids = win_findbuf(nr)
-  if !empty(wids)
-    call win_gotoid(wids[0])
-  else
-    tabnew
-    exe "b " . nr
-  endif
+func TermDebugCaptureNr()
+  return bufnr(s:capture_bufname)
+endfunc
+
+func TermDebugLogNr()
+  return bufnr(s:log_bufname)
 endfunc
 
 func TermDebugGoToSource()
@@ -181,6 +178,7 @@ func TermDebugStart(...)
   const s:gdb_bufname = "Gdb terminal"
   const s:capture_bufname = "Gdb capture"
   const s:asm_bufname = "Gdb disas"
+  const s:log_bufname = "Gdb log"
   " Sync tokens
   const s:eval_token = 1
   const s:disas_token = 2
@@ -199,7 +197,7 @@ func TermDebugStart(...)
     let s:host = a:1
   endif
 
-  call s:LoadSpecialBuffers()
+  call s:CreateSpecialBuffers()
 
   augroup TermDebug
     au BufRead * call s:BufRead()
@@ -306,32 +304,24 @@ func s:GdbOutput(job_id, msgs, event)
   endfor
 endfunc
 
-func s:LoadSpecialBuffers()
-  " Create capture buffer
-  if exists('g:termdebug_capture_msgs') && g:termdebug_capture_msgs
-    let nr = bufnr(s:capture_bufname)
+func s:CreateSpecialBuffers()
+  let bufnames = [s:capture_bufname, s:log_bufname, s:asm_bufname]
+  for bufname in bufnames
+    let nr = bufnr(bufname)
     if nr > 0
       exe "bwipe! " . nr
     endif
-    let nr = bufadd(s:capture_bufname)
+    let nr = bufadd(bufname)
     call setbufvar(nr, "&buftype", "nofile")
     call setbufvar(nr, "&swapfile", 0)
     call setbufvar(nr, "&buflisted", 1)
+    call setbufvar(nr, "&wrap", 0)
+    call setbufvar(nr, "&modifiable", 1)
     call bufload(nr)
-  endif
-
-  " Create asm window
+  endfor
+  
+  " Options for asm window
   let nr = bufnr(s:asm_bufname)
-  if nr > 0
-    exe "bwipe! " . nr
-  endif
-  let nr = bufadd(s:asm_bufname)
-  call setbufvar(nr, "&buftype", "nofile")
-  call setbufvar(nr, "&swapfile", 0)
-  call setbufvar(nr, "&buflisted", 1)
-  call setbufvar(nr, "&wrap", 0)
-  call setbufvar(nr, "&number", 1)
-  call setbufvar(nr, "&modifiable", 1)
   call setbufvar(nr, '&ft', 'asm')
 endfunc
 " }}}
@@ -339,28 +329,34 @@ endfunc
 """"""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
 
 func s:RecordHandler(msg)
+  " Async record
   let async = s:GetAsyncClass(a:msg)
   if async == "stopped" || async == "running" || async == "thread-selected"
-    call s:HandleCursor(a:msg)
+    return s:HandleCursor(a:msg)
   elseif async == "thread-group-started"
-    call s:HandleProgramRun(a:msg)
+    return s:HandleProgramRun(a:msg)
   elseif async == 'breakpoint-created' || async == 'breakpoint-modified'
-    call s:HandleNewBreakpoint(a:msg)
+    return s:HandleNewBreakpoint(a:msg)
   elseif async == 'breakpoint-deleted'
-    call s:HandleBreakpointDelete(a:msg)
+    return s:HandleBreakpointDelete(a:msg)
   endif
 
+  " Stream record
+  if stridx("~@&", a:msg[0]) >= 0
+    return s:HandleStream(a:msg)
+  endif
+
+  " Result record
   let token = s:GetResultToken(a:msg)
   if str2nr(token) > 0
     let Callback = s:callbacks[token][0]
     call remove(s:callbacks[token], 0)
   endif
-
   let result = s:GetResultClass(a:msg)
   if result == 'done' && exists('Callback')
-    call Callback(a:msg)
+    return Callback(a:msg)
   elseif result == 'error'
-    call s:HandleError(a:msg)
+    return s:HandleError(a:msg)
   endif
 endfunc
 
@@ -535,7 +531,8 @@ endfunc
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 func s:HandleEvaluate(msg)
   let value = s:GetRecordVar(a:msg, 'value')
-  let lines = split(value, '\\n')
+  exe printf('let lines = split("%s", "\n")', value)
+  " let lines = split(value, '\\n')
   call v:lua.vim.lsp.util.open_floating_preview(lines)
 endfunc
 
@@ -584,6 +581,15 @@ func s:HandleDisassemble(...)
     let addr = asm_insns[0]['address']
   endif
   call s:SelectAsmAddr(addr)
+endfunc
+
+func s:HandleStream(msg)
+  let nr = bufnr(s:log_bufname)
+  let line = getbufline(nr, '$')[0]
+  execute printf('let line .=  %s', a:msg[1:])
+  let lines = split(line, "\n", 1)
+  call setbufline(nr, "$", lines[0])
+  call appendbufline(nr, '$', lines[1:])
 endfunc
 
 func s:HandleError(msg)
@@ -652,18 +658,13 @@ func s:EndTermDebug(job_id, exit_code, event)
   endfor
 
   " Clear buffers
-  let capture_buf = bufnr(s:capture_bufname)
-  if capture_buf >= 0
-    exe 'bwipe!' . capture_buf
-  endif
-  let gdb_buf = bufnr(s:gdb_bufname)
-  if bufexists(gdb_buf)
-    exe 'bwipe! ' . gdb_buf
-  endif
-  let asm_buf = bufnr(s:asm_bufname)
-  if bufexists(asm_buf)
-    exe 'bwipe! ' . asm_buf
-  endif
+  let bufnames = [s:capture_bufname, s:gdb_bufname, s:asm_bufname, s:log_bufname]
+  for bufname in bufnames
+    let capture_buf = bufnr(s:capture_bufname)
+    if capture_buf >= 0
+      exe 'bwipe!' . capture_buf
+    endif
+  endfor
 
   if exists('#User#TermDebugStopPost')
     doauto <nomodeline> User TermDebugStopPost
