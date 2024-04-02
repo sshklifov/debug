@@ -104,14 +104,22 @@ func TermDebugSendCommand(cmd)
     echo "Cannot send command. Program is running."
     return
   endif
+  call chansend(s:gdb_job_id, a:cmd . "\n")
+endfunc
 
-  if type(a:cmd) == v:t_list
-    for command in a:cmd
-      call chansend(s:gdb_job_id, command . "\n")
-    endfor
-  else
-    call chansend(s:gdb_job_id, a:cmd . "\n")
+func TermDebugSendCommands(...)
+  if !TermDebugIsStopped()
+    echo "Cannot send command. Program is running."
+    return
   endif
+  for cmd in a:000
+    call chansend(s:gdb_job_id, cmd . "\n")
+  endfor
+endfunc
+
+func TermDebugForceCommand(cmd)
+  let Cb = function('s:HandleInterrupt', [a:cmd])
+  call TermDebugSendMICommand(s:interrupt_token, "-exec-interrupt --all", Cb)
 endfunc
 
 func TermDebugEvaluate(what)
@@ -184,6 +192,7 @@ func TermDebugStart(...)
   const s:disas_token = 2
   const s:frame_info_token = 3
   const s:frame_list_token = 4
+  const s:interrupt_token = 5
   " Set defaults for required variables
   let s:breakpoints = #{}
   let s:callbacks = #{}
@@ -549,6 +558,10 @@ func s:HandleFrame(msg)
       return
     endif
   endfor
+endfunc
+
+func s:HandleInterrupt(cmd, msg)
+  call chansend(s:gdb_job_id, a:cmd . "\n")
 endfunc
 
 func s:HandleDisassemble(...)
