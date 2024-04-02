@@ -486,7 +486,7 @@ func s:HandleNewBreakpoint(msg)
           \ enabled: bkpt['enabled'] == 'y'
           \ }
     call s:PlaceBreakpointSign(id)
-  elseif bkpt['addr'] == '<MULTIPLE>'
+  elseif has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
     for location in bkpt['locations']
       let id = location['number']
       call s:ClearBreakpointSign(id)
