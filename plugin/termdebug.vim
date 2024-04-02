@@ -458,7 +458,9 @@ endfunc
 " Handle setting a breakpoint
 " Will update the sign that shows the breakpoint
 func s:HandleNewBreakpoint(msg)
-  let bkpt = s:GetRecordDict(a:msg, 'bkpt')
+  " Handle script={cmd1, cmd2, ...} dictionaries
+  let msg = substitute(a:msg, ',\?script={.\{-}}', '', 'g')
+  let bkpt = s:GetRecordDict(msg, 'bkpt')
 
   if has_key(bkpt, 'pending') && has_key(bkpt, 'number')
     echomsg 'Breakpoint ' . bkpt['number'] . ' (' . bkpt['pending']  . ') pending.'
