@@ -131,7 +131,7 @@ func TermDebugToggleAsm()
 endfunc
 " }}}
 
-""""""""""""""""""""""""""""""""Sugar""""""""""""""""""""""""""""""{{{
+""""""""""""""""""""""""""""""""Sugar"""""""""""""""""""""""""""""""""""""""""{{{
 func TermDebugBrToQf()
   let items = map(items(s:breakpoints), {_, item -> {
         \ "text": "Breakpoint " . item[0],
