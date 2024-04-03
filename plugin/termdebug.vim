@@ -160,6 +160,10 @@ func TermDebugForceCommand(cmd)
   call TermDebugSendMICommand("-exec-interrupt --all", Cb)
 endfunc
 
+func TermDebugPrintMICommand(cmd)
+  call TermDebugSendMICommand(a:cmd, {dict -> nvim_echo([[string(dict), 'Normal']], 1, #{})})
+endfunc
+
 func TermDebugEvaluate(what)
   let cmd = printf('-data-evaluate-expression "%s"', a:what)
   call TermDebugSendMICommand(cmd, function('s:HandleEvaluate'))
@@ -171,6 +175,10 @@ endfunc
 
 func TermDebugBacktrace()
   call TermDebugSendMICommand('-stack-list-frames', function('s:HandleBacktrace'))
+endfunc
+
+func TermDebugThreadInfo()
+  call TermDebugSendMICommand('-thread-list-ids', function('s:HandleThreadList'))
 endfunc
 "}}}
 
@@ -653,6 +661,15 @@ func s:Get(dict, ...)
   return result
 endfunc
 
+func s:GetListWithKeys(dict, key)
+  let res = a:dict[a:key]
+  if type(res) == v:t_dict
+    return values(res)
+  else
+    return res
+  endif
+endfunc
+
 func s:MatchGetCapture(string, pat)
   let res = matchlist(a:string, a:pat)
   if empty(res)
@@ -717,15 +734,10 @@ func s:HandleStream(msg)
 endfunc
 
 func s:HandleFrame(dict)
-  let stack = a:dict['stack']
-  if type(stack) == v:t_dict
-    let frames = values(stack)
-  else
-    let frames = stack
-  endif
-
+  let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
-    if has_key(frame, 'fullname') && filereadable(frame['fullname'])
+    let fullname = s:Get(frame, 'fullname')
+    if filereadable(fullname)
       call TermDebugSendCommand("frame " . frame['level'])
       return
     endif
@@ -733,21 +745,56 @@ func s:HandleFrame(dict)
 endfunc
 
 func s:HandleBacktrace(dict)
-  let stack = a:dict['stack']
-  if type(stack) == v:t_dict
-    let frames = values(stack)
-  else
-    let frames = stack
-  endif
-
   let list = []
+  let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
-    if has_key(frame, 'fullname') && filereadable(frame['fullname'])
-      call add(list, #{text: frame['level'], filename: frame['fullname'], lnum: frame['line']})
+    let fullname = s:Get(frame, 'fullname')
+    if filereadable(fullname)
+      call add(list, #{text: frame['level'], filename: fullname, lnum: frame['line']})
     endif
   endfor
   call TermDebugGoToSource()
   call setqflist([], ' ', #{title: "Backtrace", items: list})
+  copen
+endfunc
+
+func s:HandleThreadList(dict)
+  let ids = s:GetListWithKeys(a:dict, 'thread-ids')
+  let s:pending_threads = len(ids)
+  let s:collected = #{}
+  for id in ids
+    let Cb = function('s:CollectThreads', [id])
+    call TermDebugSendMICommand('-stack-list-frames --thread ' . id, Cb)
+  endfor
+endfunc
+
+func s:CollectThreads(id, dict)
+  let frames = s:GetListWithKeys(a:dict, 'stack')
+  let s:collected[a:id] = frames
+  if len(s:collected) != s:pending_threads
+    " Wait for all threads
+    return
+  endif
+
+  let list = []
+  for key in keys(s:collected)
+    let thread_frames = 0
+    for frame in s:collected[key]
+      let fullname = s:Get(frame, 'fullname')
+      if filereadable(fullname)
+        let text = printf('Thread %d at frame %d', key, frame['level'])
+        call add(list, #{text: text, filename: frame['fullname'], lnum: frame['line']})
+        let thread_frames += 1
+        if thread_frames > 3
+          break
+        endif
+      endif
+    endfor
+  endfor
+
+  unlet s:collected
+  unlet s:pending_threads
+  call setqflist([], ' ', #{title: 'Threads', items: list})
   copen
 endfunc
 
