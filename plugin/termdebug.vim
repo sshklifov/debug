@@ -124,30 +124,14 @@ func TermDebugSendCommands(...)
   endfor
 endfunc
 
-func TermDebugForceCommand(cmd)
-  let Cb = function('s:HandleInterrupt', [a:cmd])
-  call TermDebugSendMICommand("-exec-interrupt --all", Cb)
-endfunc
-
-func TermDebugEvaluate(what)
-  let cmd = printf('-data-evaluate-expression "%s"', a:what)
-  call TermDebugSendMICommand(cmd, function('s:HandleEvaluate'))
-endfunc
-
 func TermDebugToggleAsm()
   let s:asm_mode = s:asm_mode ? 0 : 1
   call s:ClearCursorSign()
   call TermDebugSendMICommand('-stack-info-frame', function('s:PlaceCursorSign'))
 endfunc
+" }}}
 
-func TermDebugGoUp()
-  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrame'))
-endfunc
-
-func TermDebugBacktrace()
-  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleBacktrace'))
-endfunc
-
+""""""""""""""""""""""""""""""""Sugar""""""""""""""""""""""""""""""{{{
 func TermDebugBrToQf()
   let items = map(items(s:breakpoints), {_, item -> {
         \ "text": "Breakpoint " . item[0],
@@ -170,7 +154,25 @@ func TermDebugQfToBr()
   endfor
   cclose
 endfunc
-" }}}
+
+func TermDebugForceCommand(cmd)
+  let Cb = function('s:HandleInterrupt', [a:cmd])
+  call TermDebugSendMICommand("-exec-interrupt --all", Cb)
+endfunc
+
+func TermDebugEvaluate(what)
+  let cmd = printf('-data-evaluate-expression "%s"', a:what)
+  call TermDebugSendMICommand(cmd, function('s:HandleEvaluate'))
+endfunc
+
+func TermDebugGoUp()
+  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrame'))
+endfunc
+
+func TermDebugBacktrace()
+  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleBacktrace'))
+endfunc
+"}}}
 
 """"""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""""{{{
 func TermDebugStart(...)
