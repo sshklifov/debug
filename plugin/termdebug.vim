@@ -136,6 +136,10 @@ func TermDebugGoUp()
   call TermDebugSendMICommand(s:frame_list_token, '-stack-list-frames', function('s:HandleFrame'))
 endfunc
 
+func TermDebugBacktrace()
+  call TermDebugSendMICommand(s:backtrace_token, '-stack-list-frames', function('s:HandleBacktrace'))
+endfunc
+
 func TermDebugBrToQf()
   let items = map(items(s:breakpoints), {_, item -> {
         \ "text": "Breakpoint " . item[0],
@@ -192,6 +196,7 @@ func TermDebugStart(...)
   const s:frame_info_token = 3
   const s:frame_list_token = 4
   const s:interrupt_token = 5
+  const s:backtrace_token = 6
   " Set defaults for required variables
   let s:breakpoints = #{}
   let s:callbacks = #{}
@@ -544,16 +549,32 @@ func s:HandleEvaluate(msg)
 endfunc
 
 func s:HandleFrame(msg)
-  " Handle [frame={}, frame={}, frame={}] lists
-  let msg = substitute(a:msg, ',frame=', ',', 'g')
-  let msg = substitute(msg, '[frame=', '[', 'g')
-  let frames = s:GetRecordDict(msg, 'stack')
+  let frames = s:GetRecordStack(a:msg)
   for frame in frames
     if has_key(frame, 'fullname') && filereadable(frame['fullname'])
       call TermDebugSendCommand("frame " . frame['level'])
       return
     endif
   endfor
+endfunc
+
+func s:HandleBacktrace(msg)
+  let list = []
+  let frames = s:GetRecordStack(a:msg)
+  for frame in frames
+    if has_key(frame, 'fullname') && filereadable(frame['fullname'])
+      call add(list, #{text: frame['level'], filename: frame['fullname'], lnum: frame['line']})
+    endif
+  endfor
+  call TermDebugGoToSource()
+  call setqflist([], ' ', #{title: "Backtrace", items: list})
+  copen
+endfunc
+
+func s:GetRecordStack(msg)
+  let msg = substitute(a:msg, ',frame=', ',', 'g')
+  let msg = substitute(msg, '[frame=', '[', 'g')
+  return s:GetRecordDict(msg, 'stack')
 endfunc
 
 func s:HandleInterrupt(cmd, msg)
