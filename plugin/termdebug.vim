@@ -118,26 +118,26 @@ endfunc
 
 func TermDebugForceCommand(cmd)
   let Cb = function('s:HandleInterrupt', [a:cmd])
-  call TermDebugSendMICommand(s:interrupt_token, "-exec-interrupt --all", Cb)
+  call TermDebugSendMICommand("-exec-interrupt --all", Cb)
 endfunc
 
 func TermDebugEvaluate(what)
   let cmd = printf('-data-evaluate-expression "%s"', a:what)
-  call TermDebugSendMICommand(s:eval_token, cmd, function('s:HandleEvaluate'))
+  call TermDebugSendMICommand(cmd, function('s:HandleEvaluate'))
 endfunc
 
 func TermDebugToggleAsm()
   let s:asm_mode = s:asm_mode ? 0 : 1
   call s:ClearCursorSign()
-  call TermDebugSendMICommand(s:frame_info_token, '-stack-info-frame', function('s:PlaceCursorSign'))
+  call TermDebugSendMICommand('-stack-info-frame', function('s:PlaceCursorSign'))
 endfunc
 
 func TermDebugGoUp()
-  call TermDebugSendMICommand(s:frame_list_token, '-stack-list-frames', function('s:HandleFrame'))
+  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrame'))
 endfunc
 
 func TermDebugBacktrace()
-  call TermDebugSendMICommand(s:backtrace_token, '-stack-list-frames', function('s:HandleBacktrace'))
+  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleBacktrace'))
 endfunc
 
 func TermDebugBrToQf()
@@ -190,13 +190,6 @@ func TermDebugStart(...)
   const s:capture_bufname = "Gdb capture"
   const s:asm_bufname = "Gdb disas"
   const s:log_bufname = "Gdb log"
-  " Sync tokens
-  const s:eval_token = 1
-  const s:disas_token = 2
-  const s:frame_info_token = 3
-  const s:frame_list_token = 4
-  const s:interrupt_token = 5
-  const s:backtrace_token = 6
   " Set defaults for required variables
   let s:breakpoints = #{}
   let s:callbacks = #{}
@@ -206,6 +199,7 @@ func TermDebugStart(...)
   let s:asm_mode = 0
   let s:sourcewin = win_getid()
   let s:comm_buf = ""
+  let s:token_counter = 1
   if a:0 > 0
     let s:host = a:1
   endif
@@ -360,14 +354,15 @@ func s:RecordHandler(msg)
   endif
 
   " Result record
-  let token = s:GetResultToken(a:msg)
-  if str2nr(token) > 0
-    let Callback = s:callbacks[token][0]
-    call remove(s:callbacks[token], 0)
-  endif
   let result = s:GetResultClass(a:msg)
-  if result == 'done' && exists('Callback')
-    return Callback(a:msg)
+  if result == 'done'
+    let token = s:GetResultToken(a:msg)
+    if str2nr(token) > 0 && has_key(s:callbacks, token)
+      let Callback = s:callbacks[token]
+      return Callback(a:msg)
+    else
+      echom "Unhandled record: " . result
+    endif
   elseif result == 'error'
     return s:HandleError(a:msg)
   endif
@@ -422,7 +417,7 @@ func s:PlaceAsmCursor(msg)
     " Reload disassembly
     let cmd = printf("-data-disassemble -a %s 0", addr)
     let Cb = function('s:HandleDisassemble', [addr])
-    call TermDebugSendMICommand(s:disas_token, cmd, Cb)
+    call TermDebugSendMICommand(cmd, Cb)
   endif
 endfunc
 
@@ -619,13 +614,13 @@ func s:HandleError(msg)
   echom err
 endfunc
 
-func TermDebugSendMICommand(token, cmd, Callback)
-  if !has_key(s:callbacks, a:token)
-    let s:callbacks[a:token] = []
-  endif
-  call add(s:callbacks[a:token], a:Callback)
+func TermDebugSendMICommand(cmd, Callback)
+  let token = s:token_counter
+  let s:token_counter += 1
 
-  let cmd = printf("%d%s", a:token, a:cmd)
+  let s:callbacks[token] = a:Callback
+
+  let cmd = printf("%d%s", token, a:cmd)
   call chansend(s:comm_job_id, cmd . "\n")
 endfunc
 
