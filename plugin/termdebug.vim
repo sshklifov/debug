@@ -15,8 +15,7 @@ hi default link debugPC CursorLine
 hi default debugBreakpoint gui=reverse guibg=red
 hi default debugBreakpointDisabled gui=reverse guibg=gray
 
-""""""""""""""""""""""""""""""""""""Go to"""""""""""""""""""""""""""""""""""""{{{
-"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""""Go to"""""""""""""""""""""""""""""""""""""""""{{{
 func TermDebugGoToPC()
   if bufexists(s:pcbuf)
     exe "b " . s:pcbuf
@@ -75,8 +74,7 @@ func TermDebugGoToGdb()
 endfunc
 "}}}
 
-"""""""""""""""""""""""""""""""Global functions"""""""""""""""""""""""""""""""{{{
-""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""""Global functions""""""""""""""""""""""""""""""{{{
 func TermDebugIsOpen()
   if !exists('s:gdb_job_id')
     return v:false
@@ -96,6 +94,16 @@ func TermDebugGetPid()
     return 0
   endif
   return s:pid
+endfunc
+
+func TermDebugSendMICommand(cmd, Callback)
+  let token = s:token_counter
+  let s:token_counter += 1
+
+  let s:callbacks[token] = a:Callback
+
+  let cmd = printf("%d%s", token, a:cmd)
+  call chansend(s:comm_job_id, cmd . "\n")
 endfunc
 
 func TermDebugSendCommand(cmd)
@@ -165,7 +173,6 @@ endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""""{{{
-""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 func TermDebugStart(...)
   if TermDebugIsOpen()
     echo 'Terminal debugger already running, cannot run two'
@@ -232,13 +239,14 @@ func s:LaunchComm()
 endfunc
 
 func s:CommJoin(job_id, msgs, event)
-  for msg in filter(a:msgs, "!empty(v:val)")
-    let s:comm_buf .= msg
-    if s:comm_buf[-1:] == "\r"
-      call s:CommOutput(s:comm_buf[0:-2])
-      let s:comm_buf = ""
-    endif
-  endfor
+  let s:comm_buf .= join(a:msgs, '')
+  let commands = split(s:comm_buf, "\r", 1)
+  if len(commands) > 1
+    for cmd in commands[:-2]
+      call s:CommOutput(cmd)
+    endfor
+    let s:comm_buf = commands[-1]
+  endif
 endfunc
 
 func s:CommOutput(msg)
@@ -334,23 +342,24 @@ endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
-
 func s:RecordHandler(msg)
-  " Async record
-  let async = s:GetAsyncClass(a:msg)
-  if async == "stopped" || async == "running" || async == "thread-selected"
-    return s:HandleCursor(a:msg)
-  elseif async == "thread-group-started"
-    return s:HandleProgramRun(a:msg)
-  elseif async == 'breakpoint-created' || async == 'breakpoint-modified'
-    return s:HandleNewBreakpoint(a:msg)
-  elseif async == 'breakpoint-deleted'
-    return s:HandleBreakpointDelete(a:msg)
-  endif
-
   " Stream record
   if stridx("~@&", a:msg[0]) >= 0
     return s:HandleStream(a:msg)
+  endif
+
+  let dict = s:GetResultRecord(a:msg)
+
+  " Async record
+  let async = s:GetAsyncClass(a:msg)
+  if async == "stopped" || async == "running" || async == "thread-selected"
+    return s:HandleCursor(async, dict)
+  elseif async == "thread-group-started"
+    return s:HandleProgramRun(dict)
+  elseif async == 'breakpoint-created' || async == 'breakpoint-modified'
+    return s:HandleNewBreakpoint(dict)
+  elseif async == 'breakpoint-deleted'
+    return s:HandleBreakpointDelete(dict)
   endif
 
   " Result record
@@ -359,44 +368,43 @@ func s:RecordHandler(msg)
     let token = s:GetResultToken(a:msg)
     if str2nr(token) > 0 && has_key(s:callbacks, token)
       let Callback = s:callbacks[token]
-      return Callback(a:msg)
+      return Callback(dict)
     else
-      echom "Unhandled record: " . result
+      echom "Unhandled result: " . result
     endif
   elseif result == 'error'
-    return s:HandleError(a:msg)
+    return s:HandleError(dict)
   endif
 endfunc
 
 " Handle stopping and running message from gdb.
 " Will update the sign that shows the current position.
-func s:HandleCursor(msg)
-  let class = s:GetAsyncClass(a:msg)
-  if class == 'stopped'
+func s:HandleCursor(class, dict)
+  if a:class == 'stopped'
     let s:stopped = 1
-  elseif class == 'running'
+  elseif a:class == 'running'
     let s:stopped = 0
   endif
 
   call s:ClearCursorSign()
-  if class == 'running'
+  if a:class == 'running'
     return
   endif
-  call s:PlaceCursorSign(a:msg)
+  call s:PlaceCursorSign(a:dict)
 endfunc
 
-func s:PlaceCursorSign(msg)
+func s:PlaceCursorSign(dict)
   if s:asm_mode
-    call s:PlaceAsmCursor(a:msg)
+    call s:PlaceAsmCursor(a:dict)
   else
-    call s:PlaceSourceCursor(a:msg)
+    call s:PlaceSourceCursor(a:dict)
   endif
 endfunc
 
-func s:PlaceSourceCursor(msg)
+func s:PlaceSourceCursor(dict)
   let ns = nvim_create_namespace('TermDebugPC')
-  let filename = s:GetRecordVar(a:msg, 'fullname')
-  let lnum = s:GetRecordVar(a:msg, 'line')
+  let filename = s:Get(a:dict, 'frame', 'fullname')
+  let lnum = s:Get(a:dict, 'frame', 'line')
   if filereadable(filename) && str2nr(lnum) > 0
     let origw = win_getid()
     call TermDebugGoToSource()
@@ -411,8 +419,8 @@ func s:PlaceSourceCursor(msg)
   endif
 endfunc
 
-func s:PlaceAsmCursor(msg)
-  let addr = s:GetRecordVar(a:msg, 'addr')
+func s:PlaceAsmCursor(dict)
+  let addr = s:Get(a:dict, 'frame', 'addr')
   if !s:SelectAsmAddr(addr)
     " Reload disassembly
     let cmd = printf("-data-disassemble -a %s 0", addr)
@@ -450,10 +458,9 @@ endfunc
 
 " Handle the debugged program starting to run.
 " Will store the process ID in s:pid
-func s:HandleProgramRun(msg)
-  let nr = str2nr(s:GetRecordVar(a:msg, 'pid'))
-  if nr > 0
-    let s:pid = nr
+func s:HandleProgramRun(dict)
+  if has_key(a:dict, 'pid')
+    let s:pid = a:dict['pid']
     if exists('#User#TermDebugRunPost')
       doauto <nomodeline> User TermDebugRunPost
     endif
@@ -462,11 +469,8 @@ endfunc
 
 " Handle setting a breakpoint
 " Will update the sign that shows the breakpoint
-func s:HandleNewBreakpoint(msg)
-  " Handle script={cmd1, cmd2, ...} dictionaries
-  let msg = substitute(a:msg, ',\?script={.\{-}}', '', 'g')
-  let bkpt = s:GetRecordDict(msg, 'bkpt')
-
+func s:HandleNewBreakpoint(dict)
+  let bkpt = a:dict['bkpt']
   if has_key(bkpt, 'pending') && has_key(bkpt, 'number')
     echomsg 'Breakpoint ' . bkpt['number'] . ' (' . bkpt['pending']  . ') pending.'
     return
@@ -498,8 +502,8 @@ endfunc
 
 " Handle deleting a breakpoint
 " Will remove the sign that shows the breakpoint
-func s:HandleBreakpointDelete(msg)
-  let id = s:GetRecordVar(a:msg, 'id')
+func s:HandleBreakpointDelete(dict)
+  let id = a:dict['id']
   call s:ClearBreakpointSign(id)
 endfunc
 
@@ -534,94 +538,117 @@ func s:PlaceBreakpointSign(id)
 endfunc
 " }}}
 
-"""""""""""""""""""""""""""""""Utility handlers"""""""""""""""""""""""""""""""{{{
-""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-func s:HandleEvaluate(msg)
-  let value = s:GetRecordVar(a:msg, 'value')
-  exe printf('let lines = split("%s", "\n")', value)
-  " let lines = split(value, '\\n')
-  call v:lua.vim.lsp.util.open_floating_preview(lines)
+""""""""""""""""""""""""""""""""Eval""""""""""""""""""""""""""""""""""""""""""{{{
+func s:GetResultRecord(msg)
+  let idx = stridx(a:msg, ',')
+  if idx < 0
+    return #{}
+  endif
+  let [head, rest] = s:EvalResult(a:msg[idx+1:])
+  let dict = head
+  while rest[0] == ','
+    let [head, rest] = s:EvalResult(rest[1:])
+    let k = keys(head)[0]
+    let v = values(head)[0]
+    let dict[k] = v
+  endwhile
+  return dict
 endfunc
 
-func s:HandleFrame(msg)
-  let frames = s:GetRecordStack(a:msg)
-  for frame in frames
-    if has_key(frame, 'fullname') && filereadable(frame['fullname'])
-      call TermDebugSendCommand("frame " . frame['level'])
-      return
+func s:EvalResult(msg)
+  let eq = stridx(a:msg, '=')
+  let varname = a:msg[:eq-1]
+  let [value, rest] = s:EvalValue(a:msg[eq+1:])
+  let result = {varname: value}
+  return [result, rest]
+endfunc
+
+func s:EvalValue(msg)
+  if a:msg[0] == '"'
+    return s:EvalString(a:msg)
+  elseif a:msg[1] == '"' || a:msg[1] == '{' || a:msg[1] == '['
+    " No keys, just values
+    return s:EvalList(a:msg)
+  else
+    " Key=Value pairs
+    return s:EvalTuple(a:msg)
+  endif
+endfunc
+
+func s:EvalString(msg)
+  let idx = 1
+  let len = len(a:msg)
+  while idx < len
+    if a:msg[idx] == '\'
+      let idx += 1
+    elseif a:msg[idx] == '"'
+      break
     endif
-  endfor
+    let idx += 1
+  endwhile
+  return [eval(a:msg[:idx]), a:msg[idx+1:]]
 endfunc
 
-func s:HandleBacktrace(msg)
-  let list = []
-  let frames = s:GetRecordStack(a:msg)
-  for frame in frames
-    if has_key(frame, 'fullname') && filereadable(frame['fullname'])
-      call add(list, #{text: frame['level'], filename: frame['fullname'], lnum: frame['line']})
-    endif
-  endfor
-  call TermDebugGoToSource()
-  call setqflist([], ' ', #{title: "Backtrace", items: list})
-  copen
-endfunc
-
-func s:GetRecordStack(msg)
-  let msg = substitute(a:msg, ',frame=', ',', 'g')
-  let msg = substitute(msg, '[frame=', '[', 'g')
-  return s:GetRecordDict(msg, 'stack')
-endfunc
-
-func s:HandleInterrupt(cmd, msg)
-  call chansend(s:gdb_job_id, a:cmd . "\n")
-endfunc
-
-func s:HandleDisassemble(addr, msg)
-  let asm_insns = s:GetRecordDict(a:msg, 'asm_insns')
-
-  let nr = bufnr(s:asm_bufname)
-  call deletebufline(nr, 1, '$')
-  if empty(asm_insns)
-    call appendbufline(nr, "0", "No disassembler output")
-    return
+func s:EvalTuple(msg)
+  if a:msg[1] == ']' || a:msg[1] == '}'
+    let empty = []
+    let rest = a:msg[2:]
+    return [empty, rest]
   endif
 
-  let intro = printf("Disassembly of %s:", asm_insns[0]['func-name'])
-  call appendbufline(nr, "0", intro)
+  let [head, rest] = s:EvalResult(a:msg[1:])
+  let keys = keys(head)
+  let values = values(head)
+  while rest[0] == ','
+    let [head, rest] = s:EvalResult(rest[1:])
+    call extend(keys, keys(head))
+    call extend(values, values(head))
+  endwhile
+  let rest = rest[1:]
 
-  for asm_ins in asm_insns
-    let address = asm_ins['address']
-    let offset = asm_ins['offset']
-    let inst = substitute(asm_ins['inst'], '\t', ' ', 'g')
+  " Patch GDB's weird idea of a tuple
+  let equal_keys = len(keys) > 1 && keys[0] == keys[1]
+  if equal_keys
+    return [values, rest]
+  endif
+  let dict = s:Zip(keys, values)
+  return [dict, rest]
+endfunc
 
-    let line = printf("%s<%d>: %s", address, offset, inst)
-    call appendbufline(nr, "$", line)
+func s:EvalList(msg)
+  if a:msg[1] == ']' || a:msg[1] == '}'
+    let empty = []
+    let rest = a:msg[2:]
+    return [empty, rest]
+  endif
+
+  let [head, rest] = s:EvalValue(a:msg[1:])
+  let list = [head]
+  while rest[0] == ','
+    let [head, rest] = s:EvalValue(rest[1:])
+    call add(list, head)
+  endwhile
+  let rest = rest[1:]
+  return [list, rest]
+endfunc
+
+func s:Zip(keys, values)
+  let dict = #{}
+  for i in range(len(a:keys))
+    let dict[a:keys[i]] = a:values[i]
   endfor
-  call s:SelectAsmAddr(a:addr)
+  return dict
 endfunc
 
-func s:HandleStream(msg)
-  let nr = bufnr(s:log_bufname)
-  let line = getbufline(nr, '$')[0]
-  execute printf('let line .=  %s', a:msg[1:])
-  let lines = split(line, "\n", 1)
-  call setbufline(nr, "$", lines[0])
-  call appendbufline(nr, '$', lines[1:])
-endfunc
-
-func s:HandleError(msg)
-  let err = s:GetRecordVar(a:msg, 'msg')
-  echom err
-endfunc
-
-func TermDebugSendMICommand(cmd, Callback)
-  let token = s:token_counter
-  let s:token_counter += 1
-
-  let s:callbacks[token] = a:Callback
-
-  let cmd = printf("%d%s", token, a:cmd)
-  call chansend(s:comm_job_id, cmd . "\n")
+func s:Get(dict, ...)
+  let result = a:dict
+  for key in a:000
+    if !has_key(result, key)
+      return ""
+    endif
+    let result = result[key]
+  endfor
+  return result
 endfunc
 
 func s:MatchGetCapture(string, pat)
@@ -630,20 +657,6 @@ func s:MatchGetCapture(string, pat)
     return ""
   endif
   return res[1]
-endfunc
-
-func s:GetRecordVar(msg, var_name)
-  let regex = printf('%s="\([^"]*\)"', a:var_name)
-  let msg = substitute(a:msg, '\\"', "'", "g")
-  return s:MatchGetCapture(msg, regex)
-endfunc
-
-func s:GetRecordDict(msg, var_name)
-  let start = matchend(a:msg, a:var_name . '=')
-  let msg = a:msg[start:]
-  let msg = substitute(msg, '=', ':', 'g')
-  let msg = substitute(msg, '{', '#{', 'g')
-  return eval(msg)
 endfunc
 
 func s:GetAsyncClass(msg)
@@ -659,8 +672,89 @@ func s:GetResultClass(msg)
 endfunc
 "}}}
 
-""""""""""""""""""""""""""""""Ending the session""""""""""""""""""""""""""""""{{{
-""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""""Result handles""""""""""""""""""""""""""""""""{{{
+func s:HandleEvaluate(dict)
+  let lines = split(a:dict['value'], "\n")
+  call v:lua.vim.lsp.util.open_floating_preview(lines)
+endfunc
+
+func s:HandleInterrupt(cmd, dict)
+  call chansend(s:gdb_job_id, a:cmd . "\n")
+endfunc
+
+func s:HandleDisassemble(addr, dict)
+  let asm_insns = a:dict['asm_insns']
+
+  let nr = bufnr(s:asm_bufname)
+  call deletebufline(nr, 1, '$')
+  if empty(asm_insns)
+    call appendbufline(nr, "0", "No disassembler output")
+    return
+  endif
+
+  let intro = printf("Disassembly of %s:", asm_insns[0]['func-name'])
+  call appendbufline(nr, "0", intro)
+
+  for asm_ins in asm_insns
+    let address = asm_ins['address']
+    let offset = asm_ins['offset']
+    let inst = asm_ins['inst']
+    let line = printf("%s<%d>: %s", address, offset, inst)
+    call appendbufline(nr, "$", line)
+  endfor
+  call s:SelectAsmAddr(a:addr)
+endfunc
+
+func s:HandleStream(msg)
+  let nr = bufnr(s:log_bufname)
+  let line = getbufline(nr, '$')[0]
+  execute printf('let line .=  %s', a:msg[1:])
+  let lines = split(line, "\n", 1)
+  call setbufline(nr, "$", lines[0])
+  call appendbufline(nr, '$', lines[1:])
+endfunc
+
+func s:HandleFrame(dict)
+  let stack = a:dict['stack']
+  if type(stack) == v:t_dict
+    let frames = values(stack)
+  else
+    let frames = stack
+  endif
+
+  for frame in frames
+    if has_key(frame, 'fullname') && filereadable(frame['fullname'])
+      call TermDebugSendCommand("frame " . frame['level'])
+      return
+    endif
+  endfor
+endfunc
+
+func s:HandleBacktrace(dict)
+  let stack = a:dict['stack']
+  if type(stack) == v:t_dict
+    let frames = values(stack)
+  else
+    let frames = stack
+  endif
+
+  let list = []
+  for frame in frames
+    if has_key(frame, 'fullname') && filereadable(frame['fullname'])
+      call add(list, #{text: frame['level'], filename: frame['fullname'], lnum: frame['line']})
+    endif
+  endfor
+  call TermDebugGoToSource()
+  call setqflist([], ' ', #{title: "Backtrace", items: list})
+  copen
+endfunc
+
+func s:HandleError(dict)
+  echom a:dict['msg'] 
+endfunc
+"}}}
+
+""""""""""""""""""""""""""""""""Ending the session""""""""""""""""""""""""""""{{{
 func s:EndTermDebug(job_id, exit_code, event)
   if exists('#User#TermDebugStopPre')
     doauto <nomodeline> User TermDebugStopPre
