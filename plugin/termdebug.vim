@@ -89,6 +89,10 @@ func TermDebugIsStopped()
   return s:stopped
 endfunc
 
+func TermDebugQuit()
+  call TermDebugSendMICommand('-gdb-exit', luaeval("function() end"))
+endfunc
+
 func TermDebugGetPid()
   if !TermDebugIsOpen()
     return 0
@@ -156,8 +160,12 @@ func TermDebugQfToBr()
 endfunc
 
 func TermDebugForceCommand(cmd)
-  let Cb = function('s:HandleInterrupt', [a:cmd])
-  call TermDebugSendMICommand("-exec-interrupt --all", Cb)
+  if TermDebugIsStopped()
+    call TermDebugSendCommand(cmd)
+  else
+    let Cb = function('s:HandleInterrupt', [a:cmd])
+    call TermDebugSendMICommand("-exec-interrupt --all", Cb)
+  endif
 endfunc
 
 func TermDebugPrintMICommand(cmd)
@@ -820,9 +828,9 @@ func s:EndTermDebug(job_id, exit_code, event)
   " Clear buffers
   let bufnames = [s:capture_bufname, s:gdb_bufname, s:asm_bufname, s:log_bufname]
   for bufname in bufnames
-    let capture_buf = bufnr(s:capture_bufname)
-    if capture_buf >= 0
-      exe 'bwipe!' . capture_buf
+    let nr = bufnr(bufname)
+    if nr >= 0
+      exe 'bwipe!' . nr
     endif
   endfor
 
