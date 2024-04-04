@@ -100,6 +100,10 @@ func TermDebugGetPid()
   return s:pid
 endfunc
 
+func TermDebugShowPwd()
+  call TermDebugSendMICommand('-environment-pwd', function('s:HandlePwd'))
+endfunc
+
 func TermDebugSendMICommand(cmd, Callback)
   let token = s:token_counter
   let s:token_counter += 1
@@ -710,6 +714,12 @@ func s:HandleInterrupt(cmd, dict)
   call chansend(s:gdb_job_id, a:cmd . "\n")
 endfunc
 
+func s:HandlePwd(dict)
+  " Doesn't have a consistent name...
+  let pwd = values(a:dict)[0]
+  echo "Path: " . pwd
+endfunc
+
 func s:HandleDisassemble(addr, dict)
   let asm_insns = a:dict['asm_insns']
 
@@ -759,7 +769,7 @@ func s:HandleBacktrace(dict)
   for frame in frames
     let fullname = s:Get(frame, 'fullname')
     if filereadable(fullname)
-      call add(list, #{text: frame['level'], filename: fullname, lnum: frame['line']})
+      call add(list, #{text: frame['func'], filename: fullname, lnum: frame['line']})
     endif
   endfor
   call TermDebugGoToSource()
