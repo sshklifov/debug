@@ -177,8 +177,9 @@ func TermDebugEvaluate(what)
   call TermDebugSendMICommand(cmd, function('s:HandleEvaluate'))
 endfunc
 
-func TermDebugGoUp()
-  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrame'))
+func TermDebugGoUp(regex)
+  let Cb = function('s:HandleFrame', [a:regex])
+  call TermDebugSendMICommand('-stack-list-frames', Cb)
 endfunc
 
 func TermDebugBacktrace()
@@ -741,11 +742,11 @@ func s:HandleStream(msg)
   call appendbufline(nr, '$', lines[1:])
 endfunc
 
-func s:HandleFrame(dict)
+func s:HandleFrame(regex, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
     let fullname = s:Get(frame, 'fullname')
-    if filereadable(fullname)
+    if filereadable(fullname) && match(fullname, a:regex) >= 0
       call TermDebugSendCommand("frame " . frame['level'])
       return
     endif
@@ -807,7 +808,9 @@ func s:CollectThreads(id, dict)
 endfunc
 
 func s:HandleError(dict)
-  echom a:dict['msg'] 
+  let msg = a:dict['msg']
+  " Do it this way to print the new lines
+  exe "echo " . string(msg)
 endfunc
 "}}}
 
