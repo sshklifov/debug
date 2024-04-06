@@ -103,11 +103,9 @@ endfunc
 func TermDebugSendMICommand(cmd, Callback)
   let token = s:token_counter
   let s:token_counter += 1
-
   let s:callbacks[token] = a:Callback
-
   let cmd = printf("%d%s", token, a:cmd)
-  call chansend(s:comm_job_id, cmd . "\n")
+  call chansend(s:gdb_job_id, cmd . "\n")
 endfunc
 
 func TermDebugSendCommand(cmd)
@@ -115,7 +113,8 @@ func TermDebugSendCommand(cmd)
     echo "Cannot send command. Program is running."
     return
   endif
-  call chansend(s:gdb_job_id, a:cmd . "\n")
+  let msg = printf('-interpreter-exec console "%s"', a:cmd)
+  call TermDebugSendMICommand(msg, function('s:Ignore'))
 endfunc
 
 func TermDebugSendCommands(...)
@@ -219,13 +218,13 @@ func TermDebugStart(...)
   " Set defaults for required variables
   let s:breakpoints = #{}
   let s:callbacks = #{}
+  let s:command_hist = []
   let s:pcbuf = -1
   let s:pid = 0
   let s:stopped = 1
   let s:asm_mode = 0
   let s:sourcewin = win_getid()
   let s:comm_buf = ""
-  let s:last_command = ""
   let s:token_counter = 1
   if a:0 > 0
     let s:host = a:1
@@ -237,70 +236,17 @@ func TermDebugStart(...)
     autocmd! BufRead * call s:BufRead()
   augroup END
 
-  call s:LaunchComm()
-endfunc
-
-func s:LaunchComm()
-  " Create a hidden terminal window to communicate with gdb
-  let comm_cmd = &shell
-  if exists("s:host")
-    let comm_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:host]
-  endif
-  let s:comm_job_id = jobstart(comm_cmd, #{on_stdout: function('s:CommJoin'), pty: v:true})
-  if s:comm_job_id == 0
-    echo 'Invalid argument (or job table is full) while opening communication terminal window'
-    return
-  elseif s:comm_job_id == -1
-    echo 'Failed to open the communication terminal window'
-    return
-  endif
-  call chansend(s:comm_job_id, "tty\r")
-  call chansend(s:comm_job_id, "tail -f /dev/null\r")
-endfunc
-
-func s:CommJoin(job_id, msgs, event)
-  let s:comm_buf .= join(a:msgs, '')
-  let commands = split(s:comm_buf, "\r", 1)
-  if len(commands) > 1
-    for cmd in commands[:-2]
-      call s:CommOutput(cmd)
-    endfor
-    let s:comm_buf = commands[-1]
-  endif
-endfunc
-
-func s:CommOutput(msg)
-  let bnr = bufnr(s:capture_bufname)
-  if bnr > 0
-    let newline = substitute(a:msg, "[^[:print:]]", "", "g")
-    call appendbufline(bnr, "$", newline)
-  endif
-
-  if !exists("s:comm_tty")
-    " Capture device name of communication terminal.
-    " The first command executed in the terminal will be "tty" and the output will be parsed here.
-    let tty = s:MatchGetCapture(a:msg, '\(' . '/dev/pts/[0-9]\+' . '\)')
-    if !empty(tty)
-      let s:comm_tty = tty
-      call s:LaunchGdb()
-    endif
-  else
-    call s:RecordHandler(a:msg)
-  endif
+  call s:LaunchGdb()
 endfunc
 
 func s:LaunchGdb()
   let gdb_cmd = g:termdebugger
   " Add -quiet to avoid the intro message causing a hit-enter prompt.
   let gdb_cmd .= ' -quiet'
+  " Communicate with GDB in the background via MI interface
+  let gdb_cmd .= ' --interpreter=mi'
   " Disable pagination, it causes everything to stop at the gdb
   let gdb_cmd .= ' -iex "set pagination off"'
-  " Interpret commands while the target is running.  This should usually only
-  " be exec-interrupt, since many commands don't work properly while the
-  " target is running (so execute during startup).
-  let gdb_cmd .= ' -iex "set mi-async on"'
-  " Command executed _after_ startup is done
-  let gdb_cmd .= ' -ex "new-ui mi ' . s:comm_tty . '"'
   " Launch GDB through ssh
   if exists("s:host")
     let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:host, gdb_cmd]
@@ -308,8 +254,9 @@ func s:LaunchGdb()
 
   let s:gdbwin = win_getid(winnr())
   let s:gdb_job_id = jobstart(gdb_cmd, {
-        \ 'on_stdout': function('s:GdbOutput'),
-        \ 'on_exit': function('s:EndTermDebug')
+        \ 'on_stdout': function('s:CommJoin'),
+        \ 'on_exit': function('s:EndTermDebug'),
+        \ 'pty': v:true
         \ })
   if s:gdb_job_id == 0
     echo 'Invalid argument (or job table is full) while opening gdb terminal window'
@@ -331,19 +278,39 @@ func s:LaunchGdb()
   startinsert
 endfunc
 
-func s:GdbOutput(job_id, msgs, event)
-  for msg in a:msgs
-    if msg =~ 'New UI allocated'
-      if exists('#User#TermDebugStartPost')
-        doauto <nomodeline> User TermDebugStartPost
-      endif
-    endif
-  endfor
+func s:CommJoin(job_id, msgs, event)
+  let s:comm_buf .= join(a:msgs, '')
+  let commands = split(s:comm_buf, "\r", 1)
+  if len(commands) > 1
+    for cmd in commands[:-2]
+      call s:CommOutput(cmd)
+    endfor
+    let s:comm_buf = commands[-1]
+  endif
+endfunc
+
+func s:CommOutput(msg)
+  let bnr = bufnr(s:capture_bufname)
+  if bnr > 0
+    let newline = substitute(a:msg, "[^[:print:]]", "", "g")
+    call appendbufline(bnr, "$", newline)
+  endif
+  call s:RecordHandler(a:msg)
 endfunc
 
 func s:PromptOutput(command)
-  let cmd = empty(a:command) ? s:last_command : a:command
-  let s:last_command = cmd
+  if empty(a:command)
+    " Rerun last command
+    if !empty(s:command_hist)
+      let cmd = s:command_hist[-1]
+    else
+      " First command is <CR>, do nothing
+      return
+    endif
+  else
+    let cmd = a:command
+    call add(s:command_hist, cmd)
+  endif
   let msg = printf('-interpreter-exec console "%s"', cmd)
   call TermDebugSendMICommand(msg, function('s:Ignore'))
 endfunc
@@ -405,7 +372,7 @@ func s:RecordHandler(msg)
       let Callback = s:callbacks[token]
       return Callback(dict)
     else
-      echom "Unhandled result: " . result
+      echom "Unhandled record!"
     endif
   elseif result == 'error'
     return s:HandleError(dict)
