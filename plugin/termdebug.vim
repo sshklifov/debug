@@ -178,7 +178,8 @@ endfunc
 
 func TermDebugEvaluate(what)
   let cmd = printf('-data-evaluate-expression "%s"', a:what)
-  call TermDebugSendMICommand(cmd, function('s:HandleEvaluate'))
+  let Cb = function('s:HandleEvaluate', [win_getid()])
+  call TermDebugSendMICommand(cmd, Cb)
 endfunc
 
 func TermDebugGoUp(regex)
@@ -237,7 +238,7 @@ func TermDebugStart(...)
   call s:CreateSpecialBuffers()
 
   augroup TermDebug
-    au BufRead * call s:BufRead()
+    autocmd! BufRead * call s:BufRead()
   augroup END
 
   call s:LaunchComm()
@@ -552,6 +553,7 @@ func s:PlaceBreakpointSign(id)
     let bufnr = bufnr(breakpoint['fullname'])
     let placed = has_key(breakpoint, 'extmark')
     if bufnr > 0 && !placed
+      call bufload(bufnr)
       let ns = nvim_create_namespace('TermDebugBr')
       let text = len(a:id) <= 2 ? a:id : "*"
       let hl_group = breakpoint['enabled'] ? 'debugBreakpoint' : 'debugBreakpointDisabled'
@@ -707,9 +709,16 @@ endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Result handles""""""""""""""""""""""""""""""""{{{
-func s:HandleEvaluate(dict)
+func s:HandleEvaluate(winid, dict)
   let lines = split(a:dict['value'], "\n")
-  call v:lua.vim.lsp.util.open_floating_preview(lines)
+  let was_win = win_getid()
+  call win_gotoid(a:winid)
+  call s:OpenPreview("Value", lines)
+  augroup TermDebug
+    autocmd! CursorMoved <buffer> ++once call s:ClosePreview()
+    exe printf("autocmd! WinScrolled %d ++once call s:ClosePreview()", a:winid)
+    autocmd! WinResized * ++once call s:ClosePreview()
+  augroup END
 endfunc
 
 func s:HandleInterrupt(cmd, dict)
@@ -832,7 +841,7 @@ func s:EndTermDebug(job_id, exit_code, event)
     doauto <nomodeline> User TermDebugStopPre
   endif
 
-  silent! au! TermDebug
+  silent! autocmd! TermDebug
 
   " Clear signs
   call s:ClearCursorSign()
@@ -864,3 +873,85 @@ func s:BufRead()
   endfor
 endfunc
 " }}}
+
+""""""""""""""""""""""""""""""""Preview window""""""""""""""""""""""""""""""""{{{
+func s:TraverseLayout(stack)
+  if a:stack[0] == 'leaf'
+    if a:stack[1] == win_getid()
+      return [1, winline()]
+    else
+      return [0, nvim_win_get_height(a:stack[1])]
+    endif
+  endif
+  let accum = 0
+  for tail in a:stack[1]
+    let result = s:TraverseLayout(tail)
+    if result[0]
+      return [1, accum + result[1]]
+    elseif a:stack[0] == 'col'
+      let accum += result[1]
+    endif
+  endfor
+  return [0, accum]
+endfunc
+
+func s:WinAbsoluteLine()
+  let tree = winlayout(tabpagenr())
+  let result = s:TraverseLayout(tree)
+  return result[0] ? result[1] : 0
+endfunc
+
+func s:OpenPreview(title, lines)
+  const max_width = 60
+  const max_height = 10
+
+  let sizes = map(copy(a:lines), "len(v:val)")
+  call add(sizes, len(a:title))
+  let width = min([max(sizes), max_width]) + 1
+  let height = min([len(a:lines), max_height])
+
+  " Will height lines + title fit in the OS window?
+  if s:WinAbsoluteLine() > height + 2
+    let row = -height - 2
+    let title_pos = "left"
+  else
+    let row = 1
+    let title_pos = "right"
+  endif
+
+  let opts = #{
+        \ relative: "cursor",
+        \ row: row,
+        \ col: 0,
+        \ width: width,
+        \ height: height,
+        \ focusable: 0,
+        \ style: "minimal",
+        \ border: "rounded",
+        \ title: a:title,
+        \ title_pos: title_pos
+        \ }
+  if exists("s:preview_win")
+    let nr = nvim_win_get_buf(s:preview_win)
+    call nvim_win_set_config(s:preview_win, opts)
+  else
+    let nr = nvim_create_buf(0, 0)
+    call nvim_buf_set_option(nr, "buftype", "nofile")
+    let opts['noautocmd'] = 1
+    let s:preview_win = nvim_open_win(nr, v:false, opts)
+    call nvim_win_set_option(s:preview_win, 'wrap', v:false)
+  endif
+  " call deletebufline(nr, 1, '$')
+  call setbufline(nr, 1, a:lines)
+  return s:preview_win
+endfunc
+
+func s:ClosePreview()
+  if exists("s:preview_win")
+    let nr = winbufnr(s:preview_win)
+    call nvim_win_close(s:preview_win, 1)
+    call nvim_buf_delete(nr, #{force: 1})
+    unlet s:preview_win
+  endif
+endfunc
+"}}}
