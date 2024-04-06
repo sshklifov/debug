@@ -51,10 +51,6 @@ func TermDebugCaptureNr()
   return bufnr(s:capture_bufname)
 endfunc
 
-func TermDebugLogNr()
-  return bufnr(s:log_bufname)
-endfunc
-
 func TermDebugGoToSource()
   if !win_gotoid(s:sourcewin)
     below new
@@ -63,7 +59,7 @@ func TermDebugGoToSource()
 endfunc
 
 func TermDebugGoToGdb()
-  let nr = bufnr(s:gdb_bufname)
+  let nr = bufnr(s:prompt_bufname)
   let wids = win_findbuf(nr)
   if !empty(wids)
     call win_gotoid(wids[0])
@@ -90,7 +86,7 @@ func TermDebugIsStopped()
 endfunc
 
 func TermDebugQuit()
-  call TermDebugSendMICommand('-gdb-exit', luaeval("function() end"))
+  call TermDebugSendMICommand('-gdb-exit', function("s:Ignore"))
 endfunc
 
 func TermDebugGetPid()
@@ -217,10 +213,9 @@ func TermDebugStart(...)
   endfor
 
   " Names for created buffers
-  const s:gdb_bufname = "Gdb terminal"
   const s:capture_bufname = "Gdb capture"
   const s:asm_bufname = "Gdb disas"
-  const s:log_bufname = "Gdb log"
+  const s:prompt_bufname = "Gdb terminal"
   " Set defaults for required variables
   let s:breakpoints = #{}
   let s:callbacks = #{}
@@ -230,6 +225,7 @@ func TermDebugStart(...)
   let s:asm_mode = 0
   let s:sourcewin = win_getid()
   let s:comm_buf = ""
+  let s:last_command = ""
   let s:token_counter = 1
   if a:0 > 0
     let s:host = a:1
@@ -310,9 +306,8 @@ func s:LaunchGdb()
     let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:host, gdb_cmd]
   endif
 
-  execute 'new'
   let s:gdbwin = win_getid(winnr())
-  let s:gdb_job_id = termopen(gdb_cmd, {
+  let s:gdb_job_id = jobstart(gdb_cmd, {
         \ 'on_stdout': function('s:GdbOutput'),
         \ 'on_exit': function('s:EndTermDebug')
         \ })
@@ -324,14 +319,14 @@ func s:LaunchGdb()
     return
   endif
 
-  " Rename the terminal window
-  let nr = bufnr(s:gdb_bufname)
-  if nr > 0
-    exe "bwipe " . nr
-  endif
-  exe "file " . s:gdb_bufname
-
-  set ft=gdb
+  " Open the prompt window
+  exe "above sp " . s:prompt_bufname
+  call prompt_setprompt(bufnr(), '(gdb) ')
+  call prompt_setcallback(bufnr(), function('s:PromptOutput'))
+  call prompt_setinterrupt(bufnr(), function('TermDebugQuit'))
+  augroup TermDebug
+    autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
+  augroup END
   startinsert
 endfunc
 
@@ -345,8 +340,18 @@ func s:GdbOutput(job_id, msgs, event)
   endfor
 endfunc
 
+func s:PromptOutput(command)
+  let cmd = empty(a:command) ? s:last_command : a:command
+  let s:last_command = cmd
+  let msg = printf('-interpreter-exec console "%s"', cmd)
+  call TermDebugSendMICommand(msg, function('s:Ignore'))
+endfunc
+
+func s:Ignore(...)
+endfunc
+
 func s:CreateSpecialBuffers()
-  let bufnames = [s:capture_bufname, s:log_bufname, s:asm_bufname]
+  let bufnames = [s:capture_bufname, s:asm_bufname, s:prompt_bufname]
   for bufname in bufnames
     let nr = bufnr(bufname)
     if nr > 0
@@ -364,6 +369,9 @@ func s:CreateSpecialBuffers()
   " Options for asm window
   let nr = bufnr(s:asm_bufname)
   call setbufvar(nr, '&ft', 'asm')
+  " Options for prompt
+  let nr = bufnr(s:prompt_bufname)
+  call setbufvar(nr, '&buftype', 'prompt')
 endfunc
 " }}}
 
@@ -715,7 +723,7 @@ func s:HandleEvaluate(winid, dict)
   call win_gotoid(a:winid)
   call s:OpenPreview("Value", lines)
   augroup TermDebug
-    autocmd! CursorMoved <buffer> ++once call s:ClosePreview()
+    autocmd! CursorMoved * ++once call s:ClosePreview()
     exe printf("autocmd! WinScrolled %d ++once call s:ClosePreview()", a:winid)
     autocmd! WinResized * ++once call s:ClosePreview()
   augroup END
@@ -755,12 +763,11 @@ func s:HandleDisassemble(addr, dict)
 endfunc
 
 func s:HandleStream(msg)
-  let nr = bufnr(s:log_bufname)
-  let line = getbufline(nr, '$')[0]
-  execute printf('let line .=  %s', a:msg[1:])
-  let lines = split(line, "\n", 1)
-  call setbufline(nr, "$", lines[0])
-  call appendbufline(nr, '$', lines[1:])
+  execute printf('let lines =  split(%s, "\n")', a:msg[1:])
+  call map(lines, 'substitute(v:val, "\x1b\\[[0-9;]*m", "", "g")')
+  let nr = bufnr(s:prompt_bufname)
+  let pos = len(getbufline(nr, 1, '$'))
+  call appendbufline(nr, pos - 1, lines)
 endfunc
 
 func s:HandleFrame(regex, dict)
@@ -834,45 +841,6 @@ func s:HandleError(dict)
   exe "echo " . string(msg)
 endfunc
 "}}}
-
-""""""""""""""""""""""""""""""""Ending the session""""""""""""""""""""""""""""{{{
-func s:EndTermDebug(job_id, exit_code, event)
-  if exists('#User#TermDebugStopPre')
-    doauto <nomodeline> User TermDebugStopPre
-  endif
-
-  silent! autocmd! TermDebug
-
-  " Clear signs
-  call s:ClearCursorSign()
-  for id in keys(s:breakpoints)
-    call s:ClearBreakpointSign(id)
-  endfor
-
-  " Clear buffers
-  let bufnames = [s:capture_bufname, s:gdb_bufname, s:asm_bufname, s:log_bufname]
-  for bufname in bufnames
-    let nr = bufnr(bufname)
-    if nr >= 0
-      exe 'bwipe!' . nr
-    endif
-  endfor
-
-  if exists('#User#TermDebugStopPost')
-    doauto <nomodeline> User TermDebugStopPost
-  endif
-endfunc
-
-" Handle a BufRead autocommand event: place breakpoint signs.
-func s:BufRead()
-  let fullname = expand('<afile>:p')
-  for [key, breakpoint] in items(s:breakpoints)
-    if breakpoint['fullname'] == fullname
-      call s:PlaceBreakpointSign(key)
-    endif
-  endfor
-endfunc
-" }}}
 
 """"""""""""""""""""""""""""""""Preview window""""""""""""""""""""""""""""""""{{{
 func s:TraverseLayout(stack)
@@ -955,3 +923,42 @@ func s:ClosePreview()
   endif
 endfunc
 "}}}
+
+""""""""""""""""""""""""""""""""Ending the session""""""""""""""""""""""""""""{{{
+func s:EndTermDebug(job_id, exit_code, event)
+  if exists('#User#TermDebugStopPre')
+    doauto <nomodeline> User TermDebugStopPre
+  endif
+
+  silent! autocmd! TermDebug
+
+  " Clear signs
+  call s:ClearCursorSign()
+  for id in keys(s:breakpoints)
+    call s:ClearBreakpointSign(id)
+  endfor
+
+  " Clear buffers
+  let bufnames = [s:capture_bufname, s:asm_bufname, s:prompt_bufname]
+  for bufname in bufnames
+    let nr = bufnr(bufname)
+    if nr >= 0
+      exe 'bwipe!' . nr
+    endif
+  endfor
+
+  if exists('#User#TermDebugStopPost')
+    doauto <nomodeline> User TermDebugStopPost
+  endif
+endfunc
+
+" Handle a BufRead autocommand event: place breakpoint signs.
+func s:BufRead()
+  let fullname = expand('<afile>:p')
+  for [key, breakpoint] in items(s:breakpoints)
+    if breakpoint['fullname'] == fullname
+      call s:PlaceBreakpointSign(key)
+    endif
+  endfor
+endfunc
+" }}}
