@@ -329,6 +329,8 @@ func s:LaunchGdb()
     exe "bwipe " . nr
   endif
   exe "file " . s:gdb_bufname
+
+  set ft=gdb
   startinsert
 endfunc
 
