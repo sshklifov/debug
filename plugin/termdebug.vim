@@ -764,6 +764,9 @@ endfunc
 
 func s:HandleStream(msg)
   execute printf('let lines =  split(%s, "\n")', a:msg[1:])
+  " Substitute tabs with spaces
+  call map(lines, 'substitute(v:val, "\t", "  ", "g")')
+  " Remove escape sequence
   call map(lines, 'substitute(v:val, "\x1b\\[[0-9;]*m", "", "g")')
   let nr = bufnr(s:prompt_bufname)
   let pos = len(getbufline(nr, 1, '$'))
