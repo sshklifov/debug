@@ -225,6 +225,7 @@ func TermDebugStart(...)
   let s:asm_mode = 0
   let s:sourcewin = win_getid()
   let s:comm_buf = ""
+  let s:stream_buf = ""
   let s:token_counter = 1
   if a:0 > 0
     let s:host = a:1
@@ -270,52 +271,12 @@ func s:LaunchGdb()
   exe "above sp " . s:prompt_bufname
   call prompt_setprompt(bufnr(), '(gdb) ')
   call prompt_setcallback(bufnr(), function('s:PromptOutput'))
-  call prompt_setinterrupt(bufnr(), function('TermDebugQuit'))
+  call prompt_setinterrupt(bufnr(), function('s:PromptInterrupt'))
   augroup TermDebug
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
   augroup END
   inoremap <buffer> <C-d> <cmd>call TermDebugQuit()<CR>
   startinsert
-endfunc
-
-func s:CommJoin(job_id, msgs, event)
-  let s:comm_buf .= join(a:msgs, '')
-  let commands = split(s:comm_buf, "\r", 1)
-  if len(commands) > 1
-    for cmd in commands[:-2]
-      call s:CommOutput(cmd)
-    endfor
-    let s:comm_buf = commands[-1]
-  endif
-endfunc
-
-func s:CommOutput(msg)
-  let bnr = bufnr(s:capture_bufname)
-  if bnr > 0
-    let newline = substitute(a:msg, "[^[:print:]]", "", "g")
-    call appendbufline(bnr, "$", newline)
-  endif
-  call s:RecordHandler(a:msg)
-endfunc
-
-func s:PromptOutput(command)
-  if empty(a:command)
-    " Rerun last command
-    if !empty(s:command_hist)
-      let cmd = s:command_hist[-1]
-    else
-      " First command is <CR>, do nothing
-      return
-    endif
-  else
-    let cmd = a:command
-    call add(s:command_hist, cmd)
-  endif
-  let msg = printf('-interpreter-exec console "%s"', cmd)
-  call TermDebugSendMICommand(msg, function('s:Ignore'))
-endfunc
-
-func s:Ignore(...)
 endfunc
 
 func s:CreateSpecialBuffers()
@@ -340,6 +301,53 @@ func s:CreateSpecialBuffers()
   " Options for prompt
   let nr = bufnr(s:prompt_bufname)
   call setbufvar(nr, '&buftype', 'prompt')
+endfunc
+
+func s:CommJoin(job_id, msgs, event)
+  let s:comm_buf .= join(a:msgs, '')
+  let commands = split(s:comm_buf, "\r", 1)
+  if len(commands) > 1
+    for cmd in commands[:-2]
+      call s:CommOutput(cmd)
+    endfor
+    let s:comm_buf = commands[-1]
+  endif
+endfunc
+
+func s:CommOutput(msg)
+  let bnr = bufnr(s:capture_bufname)
+  if bnr > 0
+    let newline = substitute(a:msg, "[^[:print:]]", "", "g")
+    call appendbufline(bnr, "$", newline)
+  endif
+  call s:RecordHandler(a:msg)
+endfunc
+
+func s:PromptOutput(command)
+  if !TermDebugIsStopped()
+    return
+  endif
+
+  if empty(a:command)
+    " Rerun last command
+    if !empty(s:command_hist)
+      let cmd = s:command_hist[-1]
+    else
+      " No command to rerun, do nothing
+      return
+    endif
+  else
+    let cmd = a:command
+    call add(s:command_hist, cmd)
+  endif
+  let msg = printf('-interpreter-exec console "%s"', cmd)
+  call TermDebugSendMICommand(msg, function('s:Ignore'))
+endfunc
+
+func s:PromptInterrupt()
+  let pid = jobpid(s:gdb_job_id)
+  let interrupt = 2
+  call v:lua.vim.loop.kill(pid, interrupt)
 endfunc
 " }}}
 
@@ -731,11 +739,20 @@ func s:HandleDisassemble(addr, dict)
 endfunc
 
 func s:HandleStream(msg)
-  execute printf('let lines =  split(%s, "\n")', a:msg[1:])
+  if a:msg[0] != '~' && a:msg[0] != '&'
+    return
+  endif
+
+  execute printf('let msg = %s', a:msg[1:])
   " Substitute tabs with spaces
-  call map(lines, 'substitute(v:val, "\t", "  ", "g")')
+  let msg = substitute(msg, "\t", "  ", "g")
   " Remove escape sequence
-  call map(lines, 'substitute(v:val, "\x1b\\[[0-9;]*m", "", "g")')
+  let msg = substitute(msg, "\x1b\\[[0-9;]*m", "", "g")
+  " Join with messages from previous stream record
+  let total = split(s:stream_buf . msg, "\n", 1)
+  let lines = total[:-2]
+  let s:stream_buf = total[-1]
+
   let nr = bufnr(s:prompt_bufname)
   let pos = len(getbufline(nr, 1, '$'))
   call appendbufline(nr, pos - 1, lines)
@@ -931,5 +948,8 @@ func s:BufRead()
       call s:PlaceBreakpointSign(key)
     endif
   endfor
+endfunc
+
+func s:Ignore(...)
 endfunc
 " }}}
