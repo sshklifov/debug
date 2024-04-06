@@ -327,6 +327,7 @@ func s:LaunchGdb()
   augroup TermDebug
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
   augroup END
+  inoremap <buffer> <C-d> <cmd>call TermDebugQuit()<CR>
   startinsert
 endfunc
 
