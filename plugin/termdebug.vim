@@ -276,6 +276,9 @@ func s:LaunchGdb()
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
   augroup END
   inoremap <buffer> <C-d> <cmd>call TermDebugQuit()<CR>
+  inoremap <buffer> <Up> <cmd>call <SID>ScrollHistory("-1")<CR>
+  inoremap <buffer> <Down> <cmd>call <SID>ScrollHistory("+1")<CR>
+  inoremap <buffer> <CR> <cmd>call <SID>EnterMap()<CR>
   startinsert
 endfunc
 
@@ -348,6 +351,36 @@ func s:PromptInterrupt()
   let pid = jobpid(s:gdb_job_id)
   let interrupt = 2
   call v:lua.vim.loop.kill(pid, interrupt)
+endfunc
+
+func s:ScrollHistory(expr)
+  if empty(s:command_hist)
+    return
+  endif
+  if s:IsOpenPreview("History")
+    call s:ScrollPreview(a:expr)
+  else
+    call s:OpenPreview("History", s:command_hist)
+    call s:ScrollPreview("$")
+    augroup TermDebug
+      autocmd! CursorMovedI * ++once call s:ClosePreview()
+      autocmd! InsertLeave * ++once call s:ClosePreview()
+    augroup END
+  endif
+endfunc
+
+func s:EnterMap()
+  let nr = bufnr(s:prompt_bufname)
+  if s:IsOpenPreview("History")
+    let cmd = s:AcceptPreview()
+    let line = prompt_getprompt(nr) . cmd
+    call setbufline(nr, '$', line)
+    let view = winsaveview()
+    let view['col'] = len(line) 
+    call winrestview(view)
+  elseif TermDebugIsStopped()
+    call feedkeys("\n")
+  endif
 endfunc
 " }}}
 
@@ -700,7 +733,7 @@ func s:HandleEvaluate(winid, dict)
   call s:OpenPreview("Value", lines)
   augroup TermDebug
     autocmd! CursorMoved * ++once call s:ClosePreview()
-    exe printf("autocmd! WinScrolled %d ++once call s:ClosePreview()", a:winid)
+    autocmd! WinScrolled * ++once call s:ClosePreview()
     autocmd! WinResized * ++once call s:ClosePreview()
   augroup END
 endfunc
@@ -900,6 +933,28 @@ func s:OpenPreview(title, lines)
   " call deletebufline(nr, 1, '$')
   call setbufline(nr, 1, a:lines)
   return s:preview_win
+endfunc
+
+func s:IsOpenPreview(title)
+  if !exists('s:preview_win')
+    return v:false
+  endif
+  let config = nvim_win_get_config(s:preview_win)
+  let title = join(map(config['title'], "v:val[0]"), '')
+  return has_key(config, 'title') && title == a:title
+endfunc
+
+func s:ScrollPreview(expr)
+  call win_execute(s:preview_win, a:expr)
+  call nvim_win_set_option(s:preview_win, 'cursorline', v:true)
+endfunc
+
+func s:AcceptPreview()
+  let nr = winbufnr(s:preview_win)
+  let pos = line('.', s:preview_win)
+  let res = getbufline(nr, pos)[0]
+  call s:ClosePreview()
+  return res
 endfunc
 
 func s:ClosePreview()
