@@ -305,6 +305,7 @@ func s:CreateSpecialBuffers()
   " Options for prompt
   let nr = bufnr(s:prompt_bufname)
   call setbufvar(nr, '&buftype', 'prompt')
+  call setbufvar(nr, '&ft', 'gdb')
 endfunc
 
 func s:CommJoin(job_id, msgs, event)
