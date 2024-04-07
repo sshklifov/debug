@@ -155,10 +155,15 @@ func TermDebugBrToQf()
 endfunc
 
 func TermDebugQfToBr()
+  if !TermDebugIsStopped()
+    echo "Cannot set breakpoints. Program is running."
+    return
+  endif
   for item in getqflist()
     let fname = fnamemodify(bufname(item['bufnr']), ":p")
     let lnum = item['lnum']
-    call TermDebugSendCommand("break " . fname . ":" . lnum)
+    let loc = fname . ":" . lnum
+    call TermDebugSendMICommand("-break-insert " . loc)
   endfor
   cclose
 endfunc
@@ -861,7 +866,8 @@ func s:HandleFrame(regex, dict)
   for frame in frames
     let fullname = s:Get(frame, 'fullname')
     if filereadable(fullname) && match(fullname, a:regex) >= 0
-      call TermDebugSendCommand("frame " . frame['level'])
+      let cmd = "-stack-select-frame " . frame['level']
+      call TermDebugSendMICommand(cmd, function('s:Ignore'))
       return
     endif
   endfor
