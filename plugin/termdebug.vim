@@ -282,9 +282,10 @@ func s:LaunchGdb()
   augroup END
   inoremap <buffer> <C-d> <cmd>call TermDebugQuit()<CR>
   inoremap <buffer> <C-w> <cmd>call <SID>DeleteWord()<CR>
-  inoremap <buffer> <Up> <cmd>call <SID>ScrollCompletion("-1")<CR>
-  inoremap <buffer> <Down> <cmd>call <SID>ScrollCompletion("+1")<CR>
-  inoremap <buffer> <Tab> <cmd>call <SID>OpenCompletion()<CR>
+  inoremap <buffer> <Up> <cmd>call <SID>ScrollHistory("-1")<CR>
+  inoremap <buffer> <Down> <cmd>call <SID>ScrollHistory("+1")<CR>
+  inoremap <buffer> <Tab> <cmd>call <SID>ScrollCompletion("+1")<CR>
+  inoremap <buffer> <S-Tab> <cmd>call <SID>ScrollCompletion("-1")<CR>
   inoremap <buffer> <CR> <cmd>call <SID>EnterMap()<CR>
   startinsert
 endfunc
@@ -379,7 +380,15 @@ endfunc
 func s:ScrollCompletion(expr)
   if s:IsOpenPreview()
     call s:ScrollPreview(a:expr)
-  elseif !empty(s:command_hist)
+  else
+    call s:OpenCompletion()
+  endif
+endfunc
+
+func s:ScrollHistory(expr)
+  if s:IsOpenPreview()
+    call s:ScrollPreview(a:expr)
+  elseif len(s:command_hist) > 0
     call s:OpenPreview("History", s:command_hist)
     call s:ScrollPreview("$")
     call s:ClosePreviewOn('CursorMovedI', 'InsertLeave')
