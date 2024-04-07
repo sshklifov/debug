@@ -794,7 +794,12 @@ func s:HandleCompletion(cmd, dict)
   if len(matches) > 0 && (bufname() == s:prompt_bufname)
     call s:OpenPreview("Completion", matches)
     call s:ScrollPreview("1")
-    call s:ClosePreviewOn('CursorMovedI', 'InsertLeave')
+    call s:ClosePreviewOn('InsertLeave')
+    augroup TermDebugCompletion
+      autocmd! TextChangedI <buffer> call s:OpenCompletion()
+    augroup END
+  else
+    call s:ClosePreview()
   endif
 endfunc
 
@@ -1031,7 +1036,7 @@ func s:AcceptPreview()
 endfunc
 
 func s:ClosePreviewOn(...)
-  augroup TermDebugPreview
+  augroup TermDebug
     for event in a:000
       exe printf("autocmd! %s * ++once call s:ClosePreview()", event)
     endfor
@@ -1045,6 +1050,10 @@ func s:ClosePreview()
     call nvim_buf_delete(nr, #{force: 1})
     unlet s:preview_win
   endif
+  let nr = bufnr(s:prompt_bufname)
+  if exists('#TermDebugCompletion')
+    au! TermDebugCompletion
+  endif
 endfunc
 "}}}
 
@@ -1055,7 +1064,7 @@ func s:EndTermDebug(job_id, exit_code, event)
   endif
 
   silent! autocmd! TermDebug
-  silent! autocmd! TermDebugPreview
+  silent! autocmd! TermDebugCompletion
 
   " Clear signs
   call s:ClearCursorSign()
