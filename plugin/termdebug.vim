@@ -274,10 +274,11 @@ func s:LaunchGdb()
   call prompt_setinterrupt(bufnr(), function('s:PromptInterrupt'))
   augroup TermDebug
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
+    autocmd! TextChangedI <buffer> call s:OnTextChanged()
   augroup END
   inoremap <buffer> <C-d> <cmd>call TermDebugQuit()<CR>
-  inoremap <buffer> <Up> <cmd>call <SID>ScrollHistory("-1")<CR>
-  inoremap <buffer> <Down> <cmd>call <SID>ScrollHistory("+1")<CR>
+  inoremap <buffer> <Up> <cmd>call <SID>ScrollCompletion("-1")<CR>
+  inoremap <buffer> <Down> <cmd>call <SID>ScrollCompletion("+1")<CR>
   inoremap <buffer> <CR> <cmd>call <SID>EnterMap()<CR>
   startinsert
 endfunc
@@ -353,25 +354,19 @@ func s:PromptInterrupt()
   call v:lua.vim.loop.kill(pid, interrupt)
 endfunc
 
-func s:ScrollHistory(expr)
-  if empty(s:command_hist)
-    return
-  endif
-  if s:IsOpenPreview("History")
+func s:ScrollCompletion(expr)
+  if s:IsOpenPreview()
     call s:ScrollPreview(a:expr)
-  else
+  elseif !empty(s:command_hist)
     call s:OpenPreview("History", s:command_hist)
     call s:ScrollPreview("$")
-    augroup TermDebug
-      autocmd! CursorMovedI * ++once call s:ClosePreview()
-      autocmd! InsertLeave * ++once call s:ClosePreview()
-    augroup END
+    call s:ClosePreviewOn('CursorMovedI', 'InsertLeave')
   endif
 endfunc
 
 func s:EnterMap()
   let nr = bufnr(s:prompt_bufname)
-  if s:IsOpenPreview("History")
+  if s:IsOpenPreview()
     let cmd = s:AcceptPreview()
     let line = prompt_getprompt(nr) . cmd
     call setbufline(nr, '$', line)
@@ -380,6 +375,16 @@ func s:EnterMap()
     call winrestview(view)
   elseif TermDebugIsStopped()
     call feedkeys("\n")
+  endif
+endfunc
+
+func s:OnTextChanged()
+  let nr = bufnr(s:prompt_bufname)
+  let line = getbufline(nr, '$')[0]
+  let cmd = line[len(prompt_getprompt(nr)):]
+  if !empty(cmd)
+    let Cb = function('s:HandleCompletion', [cmd])
+    call TermDebugSendMICommand(printf('-complete "%s"', cmd), Cb)
   endif
 endfunc
 " }}}
@@ -731,11 +736,17 @@ func s:HandleEvaluate(winid, dict)
   let was_win = win_getid()
   call win_gotoid(a:winid)
   call s:OpenPreview("Value", lines)
-  augroup TermDebug
-    autocmd! CursorMoved * ++once call s:ClosePreview()
-    autocmd! WinScrolled * ++once call s:ClosePreview()
-    autocmd! WinResized * ++once call s:ClosePreview()
-  augroup END
+  call s:ClosePreviewOn('CursorMoved', 'WinScrolled', 'WinResized')
+endfunc
+
+func s:HandleCompletion(cmd, dict)
+  let matches = a:dict['matches']
+  let matches = filter(matches, "v:val != a:cmd")
+  if len(matches) > 0 && (bufname() == s:prompt_bufname)
+    call s:OpenPreview("Completion", matches)
+    call s:ScrollPreview("1")
+    call s:ClosePreviewOn('CursorMovedI', 'InsertLeave')
+  endif
 endfunc
 
 func s:HandleInterrupt(cmd, dict)
@@ -929,24 +940,34 @@ func s:OpenPreview(title, lines)
     let opts['noautocmd'] = 1
     let s:preview_win = nvim_open_win(nr, v:false, opts)
     call nvim_win_set_option(s:preview_win, 'wrap', v:false)
+    call nvim_win_set_option(s:preview_win, 'cursorline', v:true)
+    call nvim_win_set_option(s:preview_win, 'scrolloff', 2)
   endif
-  " call deletebufline(nr, 1, '$')
+  call deletebufline(nr, 1, '$')
   call setbufline(nr, 1, a:lines)
   return s:preview_win
 endfunc
 
-func s:IsOpenPreview(title)
+func s:IsOpenPreview()
   if !exists('s:preview_win')
     return v:false
   endif
   let config = nvim_win_get_config(s:preview_win)
-  let title = join(map(config['title'], "v:val[0]"), '')
-  return has_key(config, 'title') && title == a:title
+  return has_key(config, 'title')
 endfunc
 
 func s:ScrollPreview(expr)
-  call win_execute(s:preview_win, a:expr)
-  call nvim_win_set_option(s:preview_win, 'cursorline', v:true)
+  let lines = line('$', s:preview_win)
+  let curr = line('.', s:preview_win)
+  if a:expr == '1'
+    call nvim_win_set_cursor(s:preview_win, [1, 0])
+  elseif a:expr == '$'
+    call nvim_win_set_cursor(s:preview_win, [lines, 0])
+  elseif a:expr == '-1' && curr > 1
+    call nvim_win_set_cursor(s:preview_win, [curr - 1, 0])
+  elseif a:expr == '+1' && curr < lines
+    call nvim_win_set_cursor(s:preview_win, [curr + 1, 0])
+  endif
 endfunc
 
 func s:AcceptPreview()
@@ -955,6 +976,14 @@ func s:AcceptPreview()
   let res = getbufline(nr, pos)[0]
   call s:ClosePreview()
   return res
+endfunc
+
+func s:ClosePreviewOn(...)
+  augroup TermDebugPreview
+    for event in a:000
+      exe printf("autocmd! %s * ++once call s:ClosePreview()", event)
+    endfor
+  augroup END
 endfunc
 
 func s:ClosePreview()
@@ -974,6 +1003,7 @@ func s:EndTermDebug(job_id, exit_code, event)
   endif
 
   silent! autocmd! TermDebug
+  silent! autocmd! TermDebugPreview
 
   " Clear signs
   call s:ClearCursorSign()
