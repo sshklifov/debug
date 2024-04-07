@@ -168,6 +168,11 @@ func TermDebugQfToBr()
   cclose
 endfunc
 
+func TermDebugFunInfo(func)
+  let cmd = '-symbol-info-functions --max-results 20 --name ' . a:func
+  call TermDebugSendMICommand(cmd, function('s:HandleSymbolInfo'))
+endfunc
+
 func TermDebugForceCommand(cmd)
   if TermDebugIsStopped()
     call TermDebugSendCommand(cmd)
@@ -505,8 +510,8 @@ endfunc
 
 func s:PlaceSourceCursor(dict)
   let ns = nvim_create_namespace('TermDebugPC')
-  let filename = s:Get(a:dict, 'frame', 'fullname')
-  let lnum = s:Get(a:dict, 'frame', 'line')
+  let filename = s:Get('', a:dict, 'frame', 'fullname')
+  let lnum = s:Get('', a:dict, 'frame', 'line')
   if filereadable(filename) && str2nr(lnum) > 0
     let origw = win_getid()
     call TermDebugGoToSource()
@@ -522,7 +527,7 @@ func s:PlaceSourceCursor(dict)
 endfunc
 
 func s:PlaceAsmCursor(dict)
-  let addr = s:Get(a:dict, 'frame', 'addr')
+  let addr = s:Get('', a:dict, 'frame', 'addr')
   if !s:SelectAsmAddr(addr)
     " Reload disassembly
     let cmd = printf("-data-disassemble -a %s 0", addr)
@@ -743,11 +748,11 @@ func s:Zip(keys, values)
   return dict
 endfunc
 
-func s:Get(dict, ...)
+func s:Get(def, dict, ...)
   let result = a:dict
   for key in a:000
-    if !has_key(result, key)
-      return ""
+    if type(result) != v:t_dict || !has_key(result, key)
+      return a:def
     endif
     let result = result[key]
   endfor
@@ -785,6 +790,30 @@ endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Result handles""""""""""""""""""""""""""""""""{{{
+func s:HandleSymbolInfo(dict)
+  let list = []
+  let locations = s:Get([], a:dict, 'symbols', 'debug')
+  for location in locations
+    let filename = location['fullname']
+    let valid = filereadable(filename)
+    for symbol in location['symbols']
+      let lnum = symbol['line']
+      let text = symbol['name']
+      if valid
+        call add(list, #{filename: filename, lnum: lnum, text: text})
+      else
+        call add(list, #{text: text, valid: 0})
+      endif
+    endfor
+  endfor
+  if empty(list)
+    echo "No debug symbols found"
+  else
+    call setqflist([], ' ', #{title: "Debug info", items: list})
+    copen
+  endif
+endfunc
+
 func s:HandleEvaluate(winid, dict)
   let lines = split(a:dict['value'], "\n")
   let was_win = win_getid()
@@ -864,7 +893,7 @@ endfunc
 func s:HandleFrame(regex, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
-    let fullname = s:Get(frame, 'fullname')
+    let fullname = s:Get('', frame, 'fullname')
     if filereadable(fullname) && match(fullname, a:regex) >= 0
       let cmd = "-stack-select-frame " . frame['level']
       call TermDebugSendMICommand(cmd, function('s:Ignore'))
@@ -877,7 +906,7 @@ func s:HandleBacktrace(dict)
   let list = []
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
-    let fullname = s:Get(frame, 'fullname')
+    let fullname = s:Get('', frame, 'fullname')
     if filereadable(fullname)
       call add(list, #{text: frame['func'], filename: fullname, lnum: frame['line']})
     endif
@@ -909,7 +938,7 @@ func s:CollectThreads(id, dict)
   for key in keys(s:collected)
     let thread_frames = 0
     for frame in s:collected[key]
-      let fullname = s:Get(frame, 'fullname')
+      let fullname = s:Get('', frame, 'fullname')
       if filereadable(fullname)
         let text = printf('Thread %d at frame %d', key, frame['level'])
         call add(list, #{text: text, filename: frame['fullname'], lnum: frame['line']})
