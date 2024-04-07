@@ -47,8 +47,13 @@ func TermDebugGoToBreakpoint(...)
   call cursor(lnum, 0)
 endfunc
 
-func TermDebugCaptureNr()
-  return bufnr(s:capture_bufname)
+func TermDebugGoToCapture()
+  let ids = win_findbuf(bufnr(s:capture_bufname))
+  if empty(ids)
+    exe "tabnew " . s:capture_bufname
+  else
+    call win_gotoid(ids[0])
+  endif
 endfunc
 
 func TermDebugGoToSource()
@@ -276,6 +281,7 @@ func s:LaunchGdb()
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
   augroup END
   inoremap <buffer> <C-d> <cmd>call TermDebugQuit()<CR>
+  inoremap <buffer> <C-w> <cmd>call <SID>DeleteWord()<CR>
   inoremap <buffer> <Up> <cmd>call <SID>ScrollCompletion("-1")<CR>
   inoremap <buffer> <Down> <cmd>call <SID>ScrollCompletion("+1")<CR>
   inoremap <buffer> <Tab> <cmd>call <SID>OpenCompletion()<CR>
@@ -350,9 +356,24 @@ func s:PromptOutput(command)
 endfunc
 
 func s:PromptInterrupt()
-  let pid = jobpid(s:gdb_job_id)
+  " Cancel partially written command
+  call s:SetCommandLine("", 0)
+  " Send interrupt to GDB
   let interrupt = 2
-  call v:lua.vim.loop.kill(pid, interrupt)
+  if !exists('s:host')
+    let pid = jobpid(s:gdb_job_id)
+    call v:lua.vim.loop.kill(pid, interrupt)
+  else
+    let progname = fnamemodify(g:termdebugger, ':t')
+    let kill = printf("pkill -%d %s", interrupt, progname)
+    call system(["ssh", a:host, kill])
+  endif
+endfunc
+
+func s:DeleteWord()
+  let [cmd_pre, cmd_post] = s:GetCommandLine(2)
+  let cmd_pre = substitute(cmd_pre, '\S*\s*$', '', '')
+  call s:SetCommandLine(cmd_pre . cmd_post, len(cmd_pre))
 endfunc
 
 func s:ScrollCompletion(expr)
@@ -369,23 +390,41 @@ func s:EnterMap()
   let nr = bufnr(s:prompt_bufname)
   if s:IsOpenPreview()
     let cmd = s:AcceptPreview()
-    let line = prompt_getprompt(nr) . cmd
-    call setbufline(nr, '$', line)
-    let view = winsaveview()
-    let view['col'] = len(line) 
-    call winrestview(view)
+    call s:SetCommandLine(cmd, len(cmd))
   elseif TermDebugIsStopped()
     call feedkeys("\n")
   endif
 endfunc
 
 func s:OpenCompletion()
+  let cmd = s:GetCommandLine()
+  let Cb = function('s:HandleCompletion', [cmd])
+  call TermDebugSendMICommand(printf('-complete "%s"', cmd), Cb)
+endfunc
+
+func s:GetCommandLine(...)
   let nr = bufnr(s:prompt_bufname)
   let line = getbufline(nr, '$')[0]
-  let cmd = line[len(prompt_getprompt(nr)):]
-  if !empty(cmd)
-    let Cb = function('s:HandleCompletion', [cmd])
-    call TermDebugSendMICommand(printf('-complete "%s"', cmd), Cb)
+  let off = len(prompt_getprompt(nr))
+  let parts = get(a:000, 0, 1)
+  if parts == 1
+    return line[off:]
+  else
+    let col = getcurpos()[2] - 1
+    return [line[off:col-1], line[col:]]
+  endif
+endfunc
+
+func s:SetCommandLine(cmd, col)
+  let nr = bufnr(s:prompt_bufname)
+  let prefix = prompt_getprompt(nr)
+  let line = prefix . a:cmd
+  let col = len(prefix) + a:col
+  call setbufline(nr, '$', line)
+  let view = winsaveview()
+  if view['col'] != col
+    let view['col'] = col
+    call winrestview(view)
   endif
 endfunc
 " }}}
@@ -799,8 +838,8 @@ func s:HandleStream(msg)
   let s:stream_buf = total[-1]
 
   let nr = bufnr(s:prompt_bufname)
-  let pos = len(getbufline(nr, 1, '$'))
-  call appendbufline(nr, pos - 1, lines)
+  let pos = nvim_buf_line_count(nr) - 1
+  call appendbufline(nr, pos, lines)
 endfunc
 
 func s:HandleFrame(regex, dict)
@@ -941,10 +980,13 @@ func s:OpenPreview(title, lines)
     let opts['noautocmd'] = 1
     let s:preview_win = nvim_open_win(nr, v:false, opts)
   endif
+
   call nvim_win_set_option(s:preview_win, 'wrap', v:false)
   call nvim_win_set_option(s:preview_win, 'cursorline', v:true)
   call nvim_win_set_option(s:preview_win, 'scrolloff', 2)
-  call deletebufline(nr, 1, '$')
+  if line('$', s:preview_win) > 1
+    call deletebufline(nr, 1, '$')
+  endif
   call setbufline(nr, 1, a:lines)
   return s:preview_win
 endfunc
