@@ -274,11 +274,11 @@ func s:LaunchGdb()
   call prompt_setinterrupt(bufnr(), function('s:PromptInterrupt'))
   augroup TermDebug
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
-    autocmd! TextChangedI <buffer> call s:OnTextChanged()
   augroup END
   inoremap <buffer> <C-d> <cmd>call TermDebugQuit()<CR>
   inoremap <buffer> <Up> <cmd>call <SID>ScrollCompletion("-1")<CR>
   inoremap <buffer> <Down> <cmd>call <SID>ScrollCompletion("+1")<CR>
+  inoremap <buffer> <Tab> <cmd>call <SID>OpenCompletion()<CR>
   inoremap <buffer> <CR> <cmd>call <SID>EnterMap()<CR>
   startinsert
 endfunc
@@ -378,7 +378,7 @@ func s:EnterMap()
   endif
 endfunc
 
-func s:OnTextChanged()
+func s:OpenCompletion()
   let nr = bufnr(s:prompt_bufname)
   let line = getbufline(nr, '$')[0]
   let cmd = line[len(prompt_getprompt(nr)):]
@@ -939,10 +939,10 @@ func s:OpenPreview(title, lines)
     call nvim_buf_set_option(nr, "buftype", "nofile")
     let opts['noautocmd'] = 1
     let s:preview_win = nvim_open_win(nr, v:false, opts)
-    call nvim_win_set_option(s:preview_win, 'wrap', v:false)
-    call nvim_win_set_option(s:preview_win, 'cursorline', v:true)
-    call nvim_win_set_option(s:preview_win, 'scrolloff', 2)
   endif
+  call nvim_win_set_option(s:preview_win, 'wrap', v:false)
+  call nvim_win_set_option(s:preview_win, 'cursorline', v:true)
+  call nvim_win_set_option(s:preview_win, 'scrolloff', 2)
   call deletebufline(nr, 1, '$')
   call setbufline(nr, 1, a:lines)
   return s:preview_win
