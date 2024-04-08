@@ -517,35 +517,31 @@ endfunc
 " Handle stopping and running message from gdb.
 " Will update the sign that shows the current position.
 func s:HandleCursor(class, dict)
-  if a:class == 'stopped' && a:dict['stopped-threads'] != 'all'
-    return
-  endif
-  if a:class == 'running' && a:dict['thread-id'] != 'all'
-    return
-  endif
-
-  if a:class == 'stopped'
-    call s:UpdateStoppedState(1)
+  " Update stopped state
+  if a:class == 'thread-selected'
+    let s:selected_thread = a:dict['id']
+  elseif a:class == 'stopped'
+    let s:selected_thread = a:dict['thread-id']
+    let s:stopped = 1
   elseif a:class == 'running'
-    call s:UpdateStoppedState(0)
+    let id = a:dict['thread-id']
+    if id == 'all' || (exists('s:selected_thread') && id == s:selected_thread)
+      let s:stopped = 0
+    endif
   endif
-
-  call s:ClearCursorSign()
-  if a:class == 'running'
-    return
-  endif
-  call s:PlaceCursorSign(a:dict)
-endfunc
-
-func s:UpdateStoppedState(stopped)
+  " Update prompt
   let ns = nvim_create_namespace('TermDebugPrompt')
   let nr = bufnr(s:prompt_bufname)
   call nvim_buf_clear_namespace(nr, ns, 0, -1)
-  if !a:stopped
+  if !s:stopped
     let lines = nvim_buf_line_count(nr)
     call nvim_buf_set_extmark(nr, ns, lines - 1, 0, #{line_hl_group: 'Comment'})
   endif
-  let s:stopped = a:stopped
+  " Update cursor
+  call s:ClearCursorSign()
+  if s:stopped
+    call s:PlaceCursorSign(a:dict)
+  endif
 endfunc
 
 func s:PlaceCursorSign(dict)
