@@ -352,23 +352,23 @@ func s:PromptOutput(command)
 
   if empty(a:command)
     " Rerun last command
-    if !empty(s:command_hist)
-      let cmd = s:command_hist[-1]
-    else
-      " No command to rerun, do nothing
-      return
-    endif
+    let cmd = get(s:command_hist, -1, "")
   else
     let cmd = a:command
     call add(s:command_hist, cmd)
   endif
-  let msg = printf('-interpreter-exec console "%s"', cmd)
-  call TermDebugSendMICommand(msg, function('s:Ignore'))
+
+  if !empty(cmd)
+    let msg = printf('-interpreter-exec console "%s"', cmd)
+    call TermDebugSendMICommand(msg, function('s:Ignore'))
+  else
+    call s:ExitHistoryScrolling(1)
+  endif
 endfunc
 
 func s:PromptInterrupt()
   " Cancel partially written command
-  call s:SetCommandLine("", 0)
+  call s:SetCommandLine("")
   " Send interrupt to GDB
   let interrupt = 2
   if !exists('s:host')
@@ -388,7 +388,7 @@ func s:DeleteWord()
 endfunc
 
 func s:ScrollCompletion(expr)
-  if s:IsOpenPreview()
+  if s:IsOpenPreview('Completion')
     call s:ScrollPreview(a:expr)
   else
     call s:OpenCompletion()
@@ -396,20 +396,51 @@ func s:ScrollCompletion(expr)
 endfunc
 
 func s:ScrollHistory(expr)
-  if s:IsOpenPreview()
-    call s:ScrollPreview(a:expr)
-  elseif len(s:command_hist) > 0
-    call s:OpenPreview("History", s:command_hist)
-    call s:ScrollPreview("$")
-    call s:ClosePreviewOn('CursorMovedI', 'InsertLeave')
+  if empty(s:command_hist)
+    return
+  endif
+
+  if a:expr == '-1'
+    if !exists('s:command_hist_idx')
+      let s:command_hist_idx = len(s:command_hist)
+      call add(s:command_hist, s:GetCommandLine())
+    endif
+    let s:command_hist_idx = s:command_hist_idx > 0 ? s:command_hist_idx - 1 : len(s:command_hist) - 1
+  elseif a:expr == '+1'
+    if !exists('s:command_hist_idx')
+      return
+    endif
+    let s:command_hist_idx = s:command_hist_idx + 1 < len(s:command_hist) ? s:command_hist_idx + 1 : 0
+  endif
+
+  call s:SetCommandLine(s:command_hist[s:command_hist_idx])
+  call s:OpenPreview("History", s:command_hist)
+  call s:ScrollPreview(s:command_hist_idx + 1)
+  augroup TermDebugHistory
+    autocmd! CursorMovedI * call s:ExitHistoryScrolling(0)
+  augroup END
+endfunc
+
+func s:ExitHistoryScrolling(force)
+  if exists('s:command_hist_idx')
+    if a:force || s:GetCommandLine() != s:command_hist[s:command_hist_idx]
+      call remove(s:command_hist, -1)
+      unlet s:command_hist_idx
+      call s:ClosePreview()
+      autocmd! TermDebugHistory
+    endif
   endif
 endfunc
 
 func s:EnterMap()
   let nr = bufnr(s:prompt_bufname)
-  if s:IsOpenPreview()
-    let cmd = s:AcceptPreview()
-    call s:SetCommandLine(cmd, len(cmd))
+  if s:IsOpenPreview('Completion')
+    let cmd = s:GetPreviewLine('.')
+    call s:ClosePreview()
+    call s:SetCommandLine(cmd)
+  elseif s:IsOpenPreview('History')
+    call s:ExitHistoryScrolling(1)
+    call feedkeys("\n")
   elseif TermDebugIsStopped()
     call feedkeys("\n")
   endif
@@ -434,11 +465,11 @@ func s:GetCommandLine(...)
   endif
 endfunc
 
-func s:SetCommandLine(cmd, col)
+func s:SetCommandLine(cmd, ...)
   let nr = bufnr(s:prompt_bufname)
   let prefix = prompt_getprompt(nr)
   let line = prefix . a:cmd
-  let col = len(prefix) + a:col
+  let col = len(prefix) + get(a:000, 0, len(a:cmd))
   call setbufline(nr, '$', line)
   let view = winsaveview()
   if view['col'] != col
@@ -1060,31 +1091,41 @@ func s:OpenPreview(title, lines)
   return s:preview_win
 endfunc
 
-func s:IsOpenPreview()
+func s:IsOpenPreview(title)
   if !exists('s:preview_win')
     return v:false
   endif
   let config = nvim_win_get_config(s:preview_win)
-  return has_key(config, 'title')
+  let title = join(map(config['title'], "v:val[0]"), '')
+  return has_key(config, 'title') && title == a:title
 endfunc
 
 func s:ScrollPreview(expr)
-  let lines = line('$', s:preview_win)
+  let num_lines = line('$', s:preview_win)
   let curr = line('.', s:preview_win)
   if a:expr == '1'
-    call nvim_win_set_cursor(s:preview_win, [1, 0])
+    let line = 1
   elseif a:expr == '$'
-    call nvim_win_set_cursor(s:preview_win, [lines, 0])
-  elseif a:expr == '-1' && curr > 1
-    call nvim_win_set_cursor(s:preview_win, [curr - 1, 0])
-  elseif a:expr == '+1' && curr < lines
-    call nvim_win_set_cursor(s:preview_win, [curr + 1, 0])
+    let line = num_lines
+  elseif a:expr == '-1'
+    let line = curr - 1
+  elseif a:expr == '+1'
+    let line = curr + 1
+  else
+    let line = str2nr(a:expr)
   endif
+  " Make it loop
+  if line < 1
+    let line = num_lines
+  elseif line > num_lines
+    let line = 1
+  endif
+  call nvim_win_set_cursor(s:preview_win, [line, 0])
 endfunc
 
-func s:AcceptPreview()
+func s:GetPreviewLine(expr)
   let nr = winbufnr(s:preview_win)
-  let pos = line('.', s:preview_win)
+  let pos = line(a:expr, s:preview_win)
   let res = getbufline(nr, pos)[0]
   call s:ClosePreview()
   return res
