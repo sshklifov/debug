@@ -377,7 +377,7 @@ func s:PromptInterrupt()
   else
     let progname = fnamemodify(g:termdebugger, ':t')
     let kill = printf("pkill -%d %s", interrupt, progname)
-    call system(["ssh", a:host, kill])
+    call system(["ssh", s:host, kill])
   endif
 endfunc
 
@@ -487,6 +487,13 @@ endfunc
 " Handle stopping and running message from gdb.
 " Will update the sign that shows the current position.
 func s:HandleCursor(class, dict)
+  if a:class == 'stopped' && a:dict['stopped-threads'] != 'all'
+    return
+  endif
+  if a:class == 'running' && a:dict['thread-id'] != 'all'
+    return
+  endif
+
   if a:class == 'stopped'
     let s:stopped = 1
   elseif a:class == 'running'
@@ -895,8 +902,10 @@ func s:HandleFrame(regex, dict)
   for frame in frames
     let fullname = s:Get('', frame, 'fullname')
     if filereadable(fullname) && match(fullname, a:regex) >= 0
-      let cmd = "-stack-select-frame " . frame['level']
-      call TermDebugSendMICommand(cmd, function('s:Ignore'))
+      if TermDebugIsStopped()
+        let cmd = printf('-interpreter-exec console "frame %d"', frame['level'])
+        call TermDebugSendMICommand(cmd, function('s:Ignore'))
+      endif
       return
     endif
   endfor
