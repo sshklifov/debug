@@ -495,9 +495,9 @@ func s:HandleCursor(class, dict)
   endif
 
   if a:class == 'stopped'
-    let s:stopped = 1
+    call s:UpdateStoppedState(1)
   elseif a:class == 'running'
-    let s:stopped = 0
+    call s:UpdateStoppedState(0)
   endif
 
   call s:ClearCursorSign()
@@ -505,6 +505,17 @@ func s:HandleCursor(class, dict)
     return
   endif
   call s:PlaceCursorSign(a:dict)
+endfunc
+
+func s:UpdateStoppedState(stopped)
+  let ns = nvim_create_namespace('TermDebugPrompt')
+  let nr = bufnr(s:prompt_bufname)
+  call nvim_buf_clear_namespace(nr, ns, 0, -1)
+  if !a:stopped
+    let lines = nvim_buf_line_count(nr)
+    call nvim_buf_set_extmark(nr, ns, lines - 1, 0, #{line_hl_group: 'Comment'})
+  endif
+  let s:stopped = a:stopped
 endfunc
 
 func s:PlaceCursorSign(dict)
