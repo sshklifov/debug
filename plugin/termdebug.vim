@@ -168,8 +168,8 @@ func TermDebugQfToBr()
   cclose
 endfunc
 
-func TermDebugFunInfo(func)
-  let cmd = '-symbol-info-functions --max-results 20 --name ' . a:func
+func TermDebugFindSym(func)
+  let cmd = '-symbol-info-functions --include-nondebug --max-results 20 --name ' . a:func
   call TermDebugSendMICommand(cmd, function('s:HandleSymbolInfo'))
 endfunc
 
@@ -201,8 +201,10 @@ func TermDebugBacktrace()
   call TermDebugSendMICommand('-stack-list-frames', function('s:HandleBacktrace'))
 endfunc
 
-func TermDebugThreadInfo()
-  call TermDebugSendMICommand('-thread-list-ids', function('s:HandleThreadList'))
+func TermDebugThreadInfo(...)
+  let pat = get(a:000, 0, '')
+  let Cb = function('s:HandleThreadList', [pat])
+  call TermDebugSendMICommand('-thread-list-ids', Cb)
 endfunc
 "}}}
 
@@ -836,8 +838,9 @@ endfunc
 """"""""""""""""""""""""""""""""Result handles""""""""""""""""""""""""""""""""{{{
 func s:HandleSymbolInfo(dict)
   let list = []
-  let locations = s:Get([], a:dict, 'symbols', 'debug')
-  for location in locations
+  " Look in debug section
+  let dbg = s:Get([], a:dict, 'symbols', 'debug')
+  for location in dbg
     let filename = location['fullname']
     let valid = filereadable(filename)
     for symbol in location['symbols']
@@ -850,11 +853,24 @@ func s:HandleSymbolInfo(dict)
       endif
     endfor
   endfor
-  if empty(list)
-    echo "No debug symbols found"
-  else
-    call setqflist([], ' ', #{title: "Debug info", items: list})
+  if !empty(list)
+    call setqflist([], ' ', #{title: "Debug", items: list})
     copen
+    return
+  endif
+  " Look in nondebug section
+  let nondebug = s:Get([], a:dict, 'symbols', 'nondebug')
+  for symbol in nondebug
+    let address = symbol['address']
+    let text = symbol['name']
+    call add(list, #{filename: address, text: text, valid: 0})
+  endfor
+  if !empty(list)
+    call setqflist([], ' ', #{title: "Nondebug", items: list})
+    copen
+    echo "Found nondebug symbols only"
+  else
+    echo "Symbol not found"
   endif
 endfunc
 
@@ -962,36 +978,30 @@ func s:HandleBacktrace(dict)
   copen
 endfunc
 
-func s:HandleThreadList(dict)
+func s:HandleThreadList(pat, dict)
   let ids = s:GetListWithKeys(a:dict, 'thread-ids')
   let s:pending_threads = len(ids)
   let s:collected = #{}
   for id in ids
-    let Cb = function('s:CollectThreads', [id])
+    let Cb = function('s:CollectThreads', [a:pat, id])
     call TermDebugSendMICommand('-stack-list-frames --thread ' . id, Cb)
   endfor
 endfunc
 
-func s:CollectThreads(id, dict)
+func s:CollectThreads(pat, id, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   let s:collected[a:id] = frames
   if len(s:collected) != s:pending_threads
-    " Wait for all threads
     return
   endif
-
+  " Wait for all threads
   let list = []
   for key in keys(s:collected)
-    let thread_frames = 0
     for frame in s:collected[key]
       let fullname = s:Get('', frame, 'fullname')
-      if filereadable(fullname)
+      if filereadable(fullname) && match(fullname, a:pat) >= 0
         let text = printf('Thread %d at frame %d', key, frame['level'])
         call add(list, #{text: text, filename: frame['fullname'], lnum: frame['line']})
-        let thread_frames += 1
-        if thread_frames > 3
-          break
-        endif
       endif
     endfor
   endfor
