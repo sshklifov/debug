@@ -294,10 +294,10 @@ func s:LaunchGdb()
   augroup END
   inoremap <buffer> <C-d> <cmd>call TermDebugQuit()<CR>
   inoremap <buffer> <C-w> <cmd>call <SID>DeleteWord()<CR>
-  inoremap <buffer> <Up> <cmd>call <SID>ScrollHistory("-1")<CR>
-  inoremap <buffer> <Down> <cmd>call <SID>ScrollHistory("+1")<CR>
-  inoremap <buffer> <Tab> <cmd>call <SID>ScrollCompletion("+1")<CR>
-  inoremap <buffer> <S-Tab> <cmd>call <SID>ScrollCompletion("-1")<CR>
+  inoremap <buffer> <Up> <cmd>call <SID>ArrowMap("-1")<CR>
+  inoremap <buffer> <Down> <cmd>call <SID>ArrowMap("+1")<CR>
+  inoremap <buffer> <Tab> <cmd>call <SID>TabMap("+1")<CR>
+  inoremap <buffer> <S-Tab> <cmd>call <SID>TabMap("-1")<CR>
   inoremap <buffer> <CR> <cmd>call <SID>EnterMap()<CR>
   startinsert
 endfunc
@@ -388,7 +388,7 @@ func s:DeleteWord()
   call s:SetCommandLine(cmd_pre . cmd_post, len(cmd_pre))
 endfunc
 
-func s:ScrollCompletion(expr)
+func s:TabMap(expr)
   if s:IsOpenPreview('Completion')
     call s:ScrollPreview(a:expr)
   else
@@ -396,7 +396,13 @@ func s:ScrollCompletion(expr)
   endif
 endfunc
 
-func s:ScrollHistory(expr)
+func s:ArrowMap(expr)
+  " Scroll completion
+  if s:IsOpenPreview("Completion")
+    call s:ScrollPreview(a:expr)
+    return
+  endif
+  " Or scroll history
   if empty(s:command_hist)
     return
   endif
@@ -419,6 +425,7 @@ func s:ScrollHistory(expr)
   call s:ScrollPreview(s:command_hist_idx + 1)
   augroup TermDebugHistory
     autocmd! CursorMovedI * call s:ExitHistoryScrolling(0)
+    autocmd! InsertLeave * call s:ExitHistoryScrolling(1)
   augroup END
 endfunc
 
@@ -436,9 +443,11 @@ endfunc
 func s:EnterMap()
   let nr = bufnr(s:prompt_bufname)
   if s:IsOpenPreview('Completion')
-    let cmd = s:GetPreviewLine('.')
+    let complete = s:GetPreviewLine('.')
     call s:ClosePreview()
-    call s:SetCommandLine(cmd)
+    let cmd_parts = split(s:GetCommandLine(), " ", 1)
+    let cmd_parts[-1] = complete
+    call s:SetCommandLine(join(cmd_parts, " "))
   elseif s:IsOpenPreview('History')
     call s:ExitHistoryScrolling(1)
     call feedkeys("\n")
@@ -884,8 +893,10 @@ endfunc
 
 func s:HandleCompletion(cmd, dict)
   let matches = a:dict['matches']
-  let matches = filter(matches, "v:val != a:cmd")
+  let matches = filter(matches, "stridx(v:val, a:cmd) == 0 && len(v:val) > len(a:cmd)")
   if len(matches) > 0 && (bufname() == s:prompt_bufname)
+    let context = split(a:cmd, " ", 1)[-1]
+    let matches = map(matches, "context .. v:val[len(a:cmd):]")
     call s:OpenPreview("Completion", matches)
     call s:ScrollPreview("1")
     call s:ClosePreviewOn('InsertLeave')
