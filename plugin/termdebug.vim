@@ -362,8 +362,6 @@ func s:PromptOutput(command)
   if !empty(cmd)
     let msg = printf('-interpreter-exec console "%s"', cmd)
     call TermDebugSendMICommand(msg, function('s:Ignore'))
-  else
-    call s:ExitHistoryScrolling(1)
   endif
 endfunc
 
@@ -391,50 +389,49 @@ endfunc
 func s:TabMap(expr)
   if s:IsOpenPreview('Completion')
     call s:ScrollPreview(a:expr)
+  elseif s:IsOpenPreview('History')
+    let inv_expr = (a:expr == "-1" ? "+1" : "-1")
+    call s:ScrollPreview(inv_expr)
+  elseif empty(s:GetCommandLine())
+    call s:OpenPreview("History", s:command_hist)
+    call s:ScrollPreview("$")
+    call s:ClosePreviewOn('InsertLeave', 'CursorMovedI')
   else
     call s:OpenCompletion()
   endif
 endfunc
 
 func s:ArrowMap(expr)
-  " Scroll completion
-  if s:IsOpenPreview("Completion")
+  if s:IsOpenPreview("Completion") || s:IsOpenPreview("History")
     call s:ScrollPreview(a:expr)
     return
   endif
-  " Or scroll history
-  if empty(s:command_hist)
-    return
-  endif
-
+  " Quickly go to older history item
   if a:expr == '-1'
     if !exists('s:command_hist_idx')
       let s:command_hist_idx = len(s:command_hist)
       call add(s:command_hist, s:GetCommandLine())
+      augroup TermDebugHistory
+        autocmd! InsertLeave * call s:EndHistoryScrolling(1)
+        autocmd! CursorMovedI * call s:EndHistoryScrolling(0)
+      augroup END
     endif
-    let s:command_hist_idx = s:command_hist_idx > 0 ? s:command_hist_idx - 1 : len(s:command_hist) - 1
+    let s:command_hist_idx = max([s:command_hist_idx - 1, 0])
   elseif a:expr == '+1'
     if !exists('s:command_hist_idx')
       return
     endif
-    let s:command_hist_idx = s:command_hist_idx + 1 < len(s:command_hist) ? s:command_hist_idx + 1 : 0
+    let s:command_hist_idx = min([s:command_hist_idx + 1, len(s:command_hist) - 1])
   endif
-
   call s:SetCommandLine(s:command_hist[s:command_hist_idx])
-  call s:OpenPreview("History", s:command_hist)
-  call s:ScrollPreview(s:command_hist_idx + 1)
-  augroup TermDebugHistory
-    autocmd! CursorMovedI * call s:ExitHistoryScrolling(0)
-    autocmd! InsertLeave * call s:ExitHistoryScrolling(1)
-  augroup END
 endfunc
 
-func s:ExitHistoryScrolling(force)
+func s:EndHistoryScrolling(force)
   if exists('s:command_hist_idx')
-    if a:force || s:GetCommandLine() != s:command_hist[s:command_hist_idx]
+    let parts = s:GetCommandLine(2)
+    if a:force || parts[1] != '' || join(parts, '') != s:command_hist[s:command_hist_idx]
       call remove(s:command_hist, -1)
       unlet s:command_hist_idx
-      call s:ClosePreview()
       autocmd! TermDebugHistory
     endif
   endif
@@ -448,10 +445,15 @@ func s:EnterMap()
     let cmd_parts = split(s:GetCommandLine(), " ", 1)
     let cmd_parts[-1] = complete
     call s:SetCommandLine(join(cmd_parts, " "))
+    return
   elseif s:IsOpenPreview('History')
-    call s:ExitHistoryScrolling(1)
-    call feedkeys("\n")
-  elseif TermDebugIsStopped()
+    call s:SetCommandLine(s:GetPreviewLine('.'))
+    call s:ClosePreview()
+    return
+  endif
+
+  call s:EndHistoryScrolling(1)
+  if TermDebugIsStopped()
     call feedkeys("\n")
   endif
 endfunc
@@ -894,7 +896,7 @@ endfunc
 func s:HandleCompletion(cmd, dict)
   let matches = a:dict['matches']
   let matches = filter(matches, "stridx(v:val, a:cmd) == 0 && len(v:val) > len(a:cmd)")
-  if len(matches) > 0 && (bufname() == s:prompt_bufname)
+  if len(a:cmd) > 0 && len(matches) > 0 && (bufname() == s:prompt_bufname)
     let context = split(a:cmd, " ", 1)[-1]
     let matches = map(matches, "context .. v:val[len(a:cmd):]")
     call s:OpenPreview("Completion", matches)
