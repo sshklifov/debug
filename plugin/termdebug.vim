@@ -359,10 +359,52 @@ func s:PromptOutput(command)
     call add(s:command_hist, cmd)
   endif
 
+  " Check if in command mode
   if !empty(cmd)
-    let msg = printf('-interpreter-exec console "%s"', cmd)
-    call TermDebugSendMICommand(msg, function('s:Ignore'))
+    call s:PromptCommand(cmd)
   endif
+endfunc
+
+func s:PromptCommand(cmd)
+  " Add command to breakpoint commands
+  if exists('s:prompt_commands')
+    if a:cmd == 'end'
+      let msg = printf('-break-commands %s', join(s:prompt_commands, " "))
+      call TermDebugSendMICommand(msg, function('s:Ignore'))
+      call prompt_setprompt(bufnr(), '(gdb) ')
+      unlet s:prompt_commands
+    else
+      call add(s:prompt_commands, '"' . a:cmd .. '"')
+    endif
+    return
+  endif
+
+  " Check if regular command
+  let cmd = split(a:cmd, " ")
+  if stridx("commands", cmd[0]) != 0 || len(cmd[0]) < 3
+    let msg = printf('-interpreter-exec console "%s"', a:cmd)
+    call TermDebugSendMICommand(msg, function('s:Ignore'))
+    return
+  endif
+
+  " Enter breakpoint command mode
+  let brs = cmd[1:]
+  if empty(brs)
+    if empty(s:breakpoints)
+      call appendbufline(bufnr(), nvim_buf_line_count(0) - 1, "No breakpoints")
+      return
+    else
+      call add(brs, max(map(keys(s:breakpoints), "str2nr(v:val)")))
+    endif
+  endif
+  for brk in brs
+    if !has_key(s:breakpoints, brk)
+      call appendbufline(bufnr(), nvim_buf_line_count(0) - 1, "No breakpoint number " . brk)
+      return
+    endif
+  endfor
+  let s:prompt_commands = brs
+  call prompt_setprompt(bufnr(), '(command) ')
 endfunc
 
 func s:PromptInterrupt()
@@ -669,6 +711,7 @@ endfunc
 func s:HandleBreakpointDelete(dict)
   let id = a:dict['id']
   call s:ClearBreakpointSign(id)
+  unlet s:breakpoints[id]
 endfunc
 
 func s:ClearBreakpointSign(id)
