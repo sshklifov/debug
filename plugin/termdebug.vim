@@ -168,6 +168,16 @@ func TermDebugQfToBr()
   cclose
 endfunc
 
+func TermDebugEditCommands(...)
+  if a:0 > 0 
+    let br = a:1
+  else
+    let br = max(map(keys(s:breakpoints), "str2nr(v:val)"))
+  endif
+  let Cb = function('s:HandleBreakpointEdit', [br])
+  call TermDebugSendMICommand("-break-info " . br, Cb)
+endfunc
+
 func TermDebugFindSym(func)
   let cmd = '-symbol-info-functions --include-nondebug --max-results 20 --name ' . a:func
   call TermDebugSendMICommand(cmd, function('s:HandleSymbolInfo'))
@@ -391,7 +401,7 @@ func s:PromptCommand(cmd)
   let brs = cmd[1:]
   if empty(brs)
     if empty(s:breakpoints)
-      call appendbufline(bufnr(), nvim_buf_line_count(0) - 1, "No breakpoints")
+      call s:PromptShowMessage("No breakpoints")
       return
     else
       call add(brs, max(map(keys(s:breakpoints), "str2nr(v:val)")))
@@ -399,7 +409,7 @@ func s:PromptCommand(cmd)
   endif
   for brk in brs
     if !has_key(s:breakpoints, brk)
-      call appendbufline(bufnr(), nvim_buf_line_count(0) - 1, "No breakpoint number " . brk)
+      call s:PromptShowMessage("No breakpoint number " . brk)
       return
     endif
   endfor
@@ -420,6 +430,12 @@ func s:PromptInterrupt()
     let kill = printf("pkill -%d %s", interrupt, progname)
     call system(["ssh", s:host, kill])
   endif
+endfunc
+
+func s:PromptShowMessage(msg)
+  let nr = bufnr(s:prompt_bufname)
+  let lines = nvim_buf_line_count(nr)
+  call appendbufline(nr, lines - 1, a:msg)
 endfunc
 
 func s:DeleteWord()
@@ -890,6 +906,27 @@ endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Result handles""""""""""""""""""""""""""""""""{{{
+func s:HandleBreakpointEdit(bp, dict)
+  let script = s:Get([], a:dict, 'BreakpointTable', 'body', 'bkpt', 'script')
+  if !empty(script) && bufname() == s:prompt_bufname
+    call s:OpenFloatEdit(script)
+    augroup TermDebugFloatEdit
+      exe printf("autocmd! WinClosed * ++once call s:OnBrEditComplete(%d)", a:bp)
+    augroup END
+  endif
+endfunc
+
+func s:OnBrEditComplete(bp)
+  let winid = expand("<amatch>")
+  let nr = winbufnr(winid)
+  let commands = getbufline(nr, 1, '$')
+  call s:CloseFloatEdit(winid)
+
+  let commands = map(commands, {k, v -> '"' . v . '"'})
+  let msg = printf("-break-commands %d %s", a:bp, join(commands, " "))
+  call TermDebugSendMICommand(msg, {_ -> s:PromptShowMessage("Breakpoint commands updated")})
+endfunc
+
 func s:HandleSymbolInfo(dict)
   let list = []
   " Look in debug section
@@ -969,12 +1006,12 @@ func s:HandleDisassemble(addr, dict)
   let nr = bufnr(s:asm_bufname)
   call deletebufline(nr, 1, '$')
   if empty(asm_insns)
-    call appendbufline(nr, "0", "No disassembler output")
+    call appendbufline(nr, 0, "No disassembler output")
     return
   endif
 
   let intro = printf("Disassembly of %s:", asm_insns[0]['func-name'])
-  call appendbufline(nr, "0", intro)
+  call appendbufline(nr, 0, intro)
 
   for asm_ins in asm_insns
     let address = asm_ins['address']
@@ -1000,10 +1037,7 @@ func s:HandleStream(msg)
   let total = split(s:stream_buf . msg, "\n", 1)
   let lines = total[:-2]
   let s:stream_buf = total[-1]
-
-  let nr = bufnr(s:prompt_bufname)
-  let pos = nvim_buf_line_count(nr) - 1
-  call appendbufline(nr, pos, lines)
+  call s:PromptShowMessage(lines)
 endfunc
 
 func s:HandleFrame(regex, dict)
@@ -1102,6 +1136,37 @@ func s:WinAbsoluteLine()
   return result[0] ? result[1] : 0
 endfunc
 
+func s:OpenFloatEdit(lines)
+  const width = 20
+  const height = 5
+  let row = (nvim_win_get_height(0) - height) / 2
+  let col = (nvim_win_get_width(0) - width) / 2
+  let opts = #{
+        \ relative: "win",
+        \ row: row,
+        \ col: col,
+        \ width: width,
+        \ height: height,
+        \ focusable: 1,
+        \ style: "minimal",
+        \ border: "single",
+        \ noautocmd: 1
+        \ }
+
+  let nr = nvim_create_buf(0, 0)
+  call nvim_buf_set_option(nr, "buftype", "nofile")
+  call setbufline(nr, 1, a:lines)
+  let winid = nvim_open_win(nr, v:false, opts)
+  call nvim_win_set_option(winid, 'wrap', v:false)
+  call win_gotoid(winid)
+  return winid
+endfunc
+
+func s:CloseFloatEdit(winid)
+  let nr = winbufnr(a:winid)
+  call nvim_buf_delete(nr, #{force: 1})
+endfunc
+
 func s:OpenPreview(title, lines)
   const max_width = 60
   const max_height = 10
@@ -1113,15 +1178,18 @@ func s:OpenPreview(title, lines)
 
   " Will height lines + title fit in the OS window?
   if s:WinAbsoluteLine() > height + 2
-    let row = -height - 2
+    let row = 0
+    let anchor = 'SW'
     let title_pos = "left"
   else
     let row = 1
+    let anchor = 'NW'
     let title_pos = "right"
   endif
 
   let opts = #{
         \ relative: "cursor",
+        \ anchor: anchor,
         \ row: row,
         \ col: 0,
         \ width: width,
