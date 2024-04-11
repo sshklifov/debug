@@ -591,7 +591,10 @@ func s:HandleCursor(class, dict)
   if a:class == 'thread-selected'
     let s:selected_thread = a:dict['id']
   elseif a:class == 'stopped'
-    let s:selected_thread = a:dict['thread-id']
+    " Key might be missing when e.g. stopped due do signal (thread group exited)
+    if has_key(a:dict, 'thread-id')
+      let s:selected_thread = a:dict['thread-id']
+    endif
     let s:stopped = 1
   elseif a:class == 'running'
     let id = a:dict['thread-id']
