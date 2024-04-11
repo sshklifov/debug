@@ -420,14 +420,13 @@ endfunc
 func s:PromptInterrupt()
   " Cancel partially written command
   call s:SetCommandLine("")
-  " Send interrupt to GDB
+  " Send interrupt
   let interrupt = 2
   if !exists('s:host')
     let pid = jobpid(s:gdb_job_id)
     call v:lua.vim.loop.kill(pid, interrupt)
   else
-    let progname = fnamemodify(g:termdebugger, ':t')
-    let kill = printf("pkill -%d %s", interrupt, progname)
+    let kill = printf("kill -%d %d", interrupt, s:pid)
     call system(["ssh", s:host, kill])
   endif
 endfunc
@@ -1032,14 +1031,15 @@ func s:HandleStream(msg)
   endif
 
   execute printf('let msg = %s', a:msg[1:])
-  " Substitute tabs with spaces
-  let msg = substitute(msg, "\t", "  ", "g")
+  " Substitute tabs with spaces TODO doesn't work for handle SIGINT
+  let msg = substitute(msg, "\t", repeat(" ", 2), "g")
   " Remove escape sequence
   let msg = substitute(msg, "\x1b\\[[0-9;]*m", "", "g")
   " Join with messages from previous stream record
   let total = split(s:stream_buf . msg, "\n", 1)
   let lines = total[:-2]
   let s:stream_buf = total[-1]
+  " Apply a user defined filter
   if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
     call filter(lines, 'stridx(v:val, "No such file") < 0')
   endif
