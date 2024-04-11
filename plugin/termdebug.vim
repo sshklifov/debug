@@ -727,7 +727,10 @@ endfunc
 func s:HandleBreakpointDelete(dict)
   let id = a:dict['id']
   call s:ClearBreakpointSign(id)
-  unlet s:breakpoints[id]
+  " Might be watchpoint that was deleted, so check first
+  if has_key(s:breakpoints, id)
+    unlet s:breakpoints[id]
+  endif
 endfunc
 
 func s:ClearBreakpointSign(id)
@@ -1037,6 +1040,9 @@ func s:HandleStream(msg)
   let total = split(s:stream_buf . msg, "\n", 1)
   let lines = total[:-2]
   let s:stream_buf = total[-1]
+  if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
+    call filter(lines, 'stridx(v:val, "No such file") < 0')
+  endif
   call s:PromptShowMessage(lines)
 endfunc
 
