@@ -132,10 +132,13 @@ func TermDebugSendCommands(...)
   endfor
 endfunc
 
-func TermDebugToggleAsm()
+func TermDebugSetAsmMode(asm_mode)
   let s:asm_mode = s:asm_mode ? 0 : 1
-  call s:ClearCursorSign()
-  call TermDebugSendMICommand('-stack-info-frame', function('s:PlaceCursorSign'))
+  if s:asm_mode != a:asm_mode
+    let s:asm_mode = a:asm_mode
+    call s:ClearCursorSign()
+    call TermDebugSendMICommand('-stack-info-frame', function('s:PlaceCursorSign'))
+  endif
 endfunc
 " }}}
 
@@ -362,27 +365,8 @@ func s:CommOutput(msg)
   call s:RecordHandler(a:msg)
 endfunc
 
-func s:PromptOutput(command)
-  if !TermDebugIsStopped()
-    return
-  endif
-
-  if empty(a:command)
-    " Rerun last command
-    let cmd = get(s:command_hist, -1, "")
-  else
-    let cmd = a:command
-    call add(s:command_hist, cmd)
-  endif
-
-  " Check if in command mode
-  if !empty(cmd)
-    call s:PromptCommand(cmd)
-  endif
-endfunc
-
-func s:PromptCommand(cmd)
-  " Add command to breakpoint commands
+func s:PromptOutput(cmd)
+  " Check if in "command>" mode
   if exists('s:prompt_commands')
     if a:cmd == 'end'
       let msg = printf('-break-commands %s', join(s:prompt_commands, " "))
@@ -395,32 +379,39 @@ func s:PromptCommand(cmd)
     return
   endif
 
-  " Check if regular command
+  " Check if "command"
   let cmd = split(a:cmd, " ")
-  if stridx("commands", cmd[0]) != 0 || len(cmd[0]) < 3
-    let msg = printf('-interpreter-exec console "%s"', a:cmd)
-    call TermDebugSendMICommand(msg, function('s:Ignore'))
+  if stridx("commands", cmd[0]) == 0 && len(cmd[0]) >= 3
+    let brs = cmd[1:]
+    if empty(brs)
+      if empty(s:breakpoints)
+        call s:PromptShowMessage("No breakpoints")
+        return
+      else
+        call add(brs, max(map(keys(s:breakpoints), "str2nr(v:val)")))
+      endif
+    endif
+    for brk in brs
+      if !has_key(s:breakpoints, brk)
+        call s:PromptShowMessage("No breakpoint number " . brk)
+        return
+      endif
+    endfor
+    let s:prompt_commands = brs
+    call prompt_setprompt(bufnr(), 'command> ')
     return
   endif
 
-  " Enter breakpoint command mode
-  let brs = cmd[1:]
-  if empty(brs)
-    if empty(s:breakpoints)
-      call s:PromptShowMessage("No breakpoints")
-      return
-    else
-      call add(brs, max(map(keys(s:breakpoints), "str2nr(v:val)")))
-    endif
+  " Toggle asm mode based on instruction stepping
+  if a:cmd == "si" || a:cmd == "stepi" || a:cmd == "ni" || a:cmd == "nexti"
+    call TermDebugSetAsmMode(1)
+  elseif a:cmd == "s" || a:cmd == "step" || a:cmd == "n" || a:cmd == "next"
+    call TermDebugSetAsmMode(0)
   endif
-  for brk in brs
-    if !has_key(s:breakpoints, brk)
-      call s:PromptShowMessage("No breakpoint number " . brk)
-      return
-    endif
-  endfor
-  let s:prompt_commands = brs
-  call prompt_setprompt(bufnr(), 'command> ')
+
+  " Regular command
+  let msg = printf('-interpreter-exec console "%s"', a:cmd)
+  call TermDebugSendMICommand(msg, function('s:Ignore'))
 endfunc
 
 func s:PromptInterrupt()
