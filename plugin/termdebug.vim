@@ -296,6 +296,7 @@ func s:LaunchGdb()
 
   " Open the prompt window
   exe "above sp " . s:prompt_bufname
+  call setbufvar(bufnr(), '&list', v:false)
   call prompt_setprompt(bufnr(), '(gdb) ')
   call prompt_setcallback(bufnr(), function('s:PromptOutput'))
   call prompt_setinterrupt(bufnr(), function('s:PromptInterrupt'))
@@ -334,6 +335,11 @@ func s:CreateSpecialBuffers()
   " Options for prompt
   let nr = bufnr(s:prompt_bufname)
   call setbufvar(nr, '&buftype', 'prompt')
+  " Display tabs properly
+  call setbufvar(nr, '&expandtab', v:false)
+  call setbufvar(nr, '&smarttab', v:false)
+  call setbufvar(nr, '&softtabstop', 0)
+  call setbufvar(nr, '&tabstop', 8)
 endfunc
 
 func s:CommJoin(job_id, msgs, event)
@@ -1034,8 +1040,6 @@ func s:HandleStream(msg)
   endif
 
   execute printf('let msg = %s', a:msg[1:])
-  " Substitute tabs with spaces TODO doesn't work for handle SIGINT
-  let msg = substitute(msg, "\t", repeat(" ", 2), "g")
   " Remove escape sequence
   let msg = substitute(msg, "\x1b\\[[0-9;]*m", "", "g")
   " Join with messages from previous stream record
