@@ -516,7 +516,20 @@ func s:EnterMap()
   endif
 
   call s:EndHistoryScrolling(1)
-  if TermDebugIsStopped()
+  if !TermDebugIsStopped()
+    return
+  endif
+
+  let cmd = s:GetCommandLine()
+  if empty(cmd) || empty(split(cmd, '\s'))
+    " Silently rerun last command
+    if !empty(s:command_hist)
+      let cmd = get(s:command_hist, -1, "")
+      call s:PromptOutput(cmd)
+    endif
+  else
+    " Add to history and input and actual <CR>
+    call add(s:command_hist, cmd)
     call feedkeys("\n")
   endif
 endfunc
@@ -1049,6 +1062,7 @@ func s:HandleStream(msg)
   " Apply a user defined filter
   if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
     call filter(lines, 'stridx(v:val, "No such file") < 0')
+    call filter(lines, {k, v -> v !~ '^[0-9]\+\s*in\s*\f\+'})
   endif
   call s:PromptShowMessage(lines)
 endfunc
