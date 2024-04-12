@@ -414,7 +414,7 @@ func s:PromptCommand(cmd)
     endif
   endfor
   let s:prompt_commands = brs
-  call prompt_setprompt(bufnr(), '(command) ')
+  call prompt_setprompt(bufnr(), 'command> ')
 endfunc
 
 func s:PromptInterrupt()
@@ -1165,9 +1165,8 @@ func s:OpenFloatEdit(lines)
   let nr = nvim_create_buf(0, 0)
   call nvim_buf_set_option(nr, "buftype", "nofile")
   call setbufline(nr, 1, a:lines)
-  let winid = nvim_open_win(nr, v:false, opts)
+  let winid = nvim_open_win(nr, v:true, opts)
   call nvim_win_set_option(winid, 'wrap', v:false)
-  call win_gotoid(winid)
   return winid
 endfunc
 
