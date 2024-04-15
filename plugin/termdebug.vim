@@ -166,7 +166,7 @@ func TermDebugQfToBr()
     let fname = fnamemodify(bufname(item['bufnr']), ":p")
     let lnum = item['lnum']
     let loc = fname . ":" . lnum
-    call TermDebugSendMICommand("-break-insert " . loc)
+    call TermDebugSendMICommand("-break-insert " . loc, function('s:Ignore'))
   endfor
   cclose
 endfunc
@@ -184,15 +184,6 @@ endfunc
 func TermDebugFindSym(func)
   let cmd = '-symbol-info-functions --include-nondebug --max-results 20 --name ' . a:func
   call TermDebugSendMICommand(cmd, function('s:HandleSymbolInfo'))
-endfunc
-
-func TermDebugForceCommand(cmd)
-  if TermDebugIsStopped()
-    call TermDebugSendCommand(cmd)
-  else
-    let Cb = function('s:HandleInterrupt', [a:cmd])
-    call TermDebugSendMICommand("-exec-interrupt --all", Cb)
-  endif
 endfunc
 
 func TermDebugPrintMICommand(cmd)
