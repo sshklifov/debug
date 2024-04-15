@@ -13,7 +13,7 @@ function! s:Debug(file)
 
   command! -nargs=0 Capture call TermDebugGoToCapture()
   command! -nargs=0 Gdb call TermDebugGoToGdb()
-  command! -nargs=0 Up call TermDebugGoUp("/home/stef")
+  command! -nargs=0 Up call TermDebugGoUp("/home/" . $USER)
   command! -nargs=0 Pwd call TermDebugShowPwd()
   command! -nargs=0 Backtrace call TermDebugBacktrace()
   command! -nargs=? Threads call TermDebugThreadInfo(<q-args>)
@@ -45,6 +45,12 @@ function! s:Debug(file)
     call TermDebugSendCommand("set args " . join(args[1:], " "))
   endif
   call TermDebugSendCommand("start")
+endfunction
+
+function! s:GetDebugLoc()
+  let basename = expand("%:t")
+  let lnum = line(".")
+  return printf("%s:%d", basename, lnum)
 endfunction
 
 function! s:DebugRunPost()
