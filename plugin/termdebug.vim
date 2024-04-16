@@ -769,7 +769,7 @@ endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Eval""""""""""""""""""""""""""""""""""""""""""{{{
-func s:GetResultRecord(msg)
+func s:GetResultRecord(msg) abort
   let idx = stridx(a:msg, ',')
   if idx < 0
     return #{}
@@ -785,7 +785,7 @@ func s:GetResultRecord(msg)
   return dict
 endfunc
 
-func s:EvalResult(msg)
+func s:EvalResult(msg) abort
   let eq = stridx(a:msg, '=')
   let varname = a:msg[:eq-1]
   let [value, rest] = s:EvalValue(a:msg[eq+1:])
@@ -793,7 +793,7 @@ func s:EvalResult(msg)
   return [result, rest]
 endfunc
 
-func s:EvalValue(msg)
+func s:EvalValue(msg) abort
   if a:msg[0] == '"'
     return s:EvalString(a:msg)
   elseif a:msg[1] == '"' || a:msg[1] == '{' || a:msg[1] == '['
@@ -805,7 +805,7 @@ func s:EvalValue(msg)
   endif
 endfunc
 
-func s:EvalString(msg)
+func s:EvalString(msg) abort
   let idx = 1
   let len = len(a:msg)
   while idx < len
@@ -819,7 +819,7 @@ func s:EvalString(msg)
   return [eval(a:msg[:idx]), a:msg[idx+1:]]
 endfunc
 
-func s:EvalTuple(msg)
+func s:EvalTuple(msg) abort
   if a:msg[1] == ']' || a:msg[1] == '}'
     let empty = []
     let rest = a:msg[2:]
@@ -845,7 +845,7 @@ func s:EvalTuple(msg)
   return [dict, rest]
 endfunc
 
-func s:EvalList(msg)
+func s:EvalList(msg) abort
   if a:msg[1] == ']' || a:msg[1] == '}'
     let empty = []
     let rest = a:msg[2:]
@@ -862,7 +862,7 @@ func s:EvalList(msg)
   return [list, rest]
 endfunc
 
-func s:Zip(keys, values)
+func s:Zip(keys, values) abort
   let dict = #{}
   for i in range(len(a:keys))
     let dict[a:keys[i]] = a:values[i]
@@ -870,7 +870,7 @@ func s:Zip(keys, values)
   return dict
 endfunc
 
-func s:Get(def, dict, ...)
+func s:Get(def, dict, ...) abort
   let result = a:dict
   for key in a:000
     if type(result) != v:t_dict || !has_key(result, key)
@@ -881,7 +881,7 @@ func s:Get(def, dict, ...)
   return result
 endfunc
 
-func s:GetListWithKeys(dict, key)
+func s:GetListWithKeys(dict, key) abort
   let res = a:dict[a:key]
   if type(res) == v:t_dict
     return values(res)
@@ -890,7 +890,7 @@ func s:GetListWithKeys(dict, key)
   endif
 endfunc
 
-func s:MatchGetCapture(string, pat)
+func s:MatchGetCapture(string, pat) abort
   let res = matchlist(a:string, a:pat)
   if empty(res)
     return ""
@@ -898,15 +898,15 @@ func s:MatchGetCapture(string, pat)
   return res[1]
 endfunc
 
-func s:GetAsyncClass(msg)
+func s:GetAsyncClass(msg) abort
   return s:MatchGetCapture(a:msg, '^[0-9]*[*+=]\([^,]*\),\?')
 endfunc
 
-func s:GetResultToken(msg)
+func s:GetResultToken(msg) abort
   return s:MatchGetCapture(a:msg, '^\([0-9]\+\)\^')
 endfunc
 
-func s:GetResultClass(msg)
+func s:GetResultClass(msg) abort
   return s:MatchGetCapture(a:msg, '^[0-9]*\^\([^,]*\),\?')
 endfunc
 "}}}
