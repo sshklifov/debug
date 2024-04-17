@@ -350,14 +350,17 @@ func s:CommJoin(job_id, msgs, event)
 endfunc
 
 func s:CommOutput(msg)
-  let bnr = bufnr(s:capture_bufname)
-  if bnr > 0
-    let newline = substitute(a:msg, "[^[:print:]]", "", "g")
-    call appendbufline(bnr, "$", newline)
+  " Add to capture buffer
+  let capture = bufnr(s:capture_bufname)
+  let empty = nvim_buf_line_count(capture) == 1 && empty(nvim_buf_get_lines(capture, 0, 1, v:true)[0])
+  if empty
+    call setbufline(capture, 1, strtrans(a:msg))
+  else
+    call appendbufline(capture, "$", strtrans(a:msg))
   endif
 
   " Stream record
-  if stridx("~@&", a:msg[0]) >= 0
+  if !empty(a:msg) && stridx("~@&", a:msg[0]) == 0
     return s:HandleStream(a:msg)
   endif
   " Async record
