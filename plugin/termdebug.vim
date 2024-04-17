@@ -269,6 +269,8 @@ func s:LaunchGdb()
   let gdb_cmd .= ' --interpreter=mi'
   " Disable pagination, it causes everything to stop at the gdb
   let gdb_cmd .= ' -iex "set pagination off"'
+  " Ignore inferior stdout 
+  let gdb_cmd .= ' -iex "set inferior-tty /dev/null"'
   " Launch GDB through ssh
   if exists("s:host")
     let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:host, gdb_cmd]
@@ -353,7 +355,21 @@ func s:CommOutput(msg)
     let newline = substitute(a:msg, "[^[:print:]]", "", "g")
     call appendbufline(bnr, "$", newline)
   endif
-  call s:RecordHandler(a:msg)
+
+  " Stream record
+  if stridx("~@&", a:msg[0]) >= 0
+    return s:HandleStream(a:msg)
+  endif
+  " Async record
+  let async = s:GetAsyncClass(a:msg)
+  if !empty(async)
+    return s:HandleAsync(a:msg)
+  endif
+  " Result record
+  let result = s:GetResultClass(a:msg)
+  if !empty(result)
+    return s:HandleResult(a:msg)
+  endif
 endfunc
 
 func s:PromptOutput(cmd)
@@ -550,16 +566,9 @@ endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
-func s:RecordHandler(msg)
-  " Stream record
-  if stridx("~@&", a:msg[0]) >= 0
-    return s:HandleStream(a:msg)
-  endif
-
-  let dict = s:GetResultRecord(a:msg)
-
-  " Async record
+func s:HandleAsync(msg)
   let async = s:GetAsyncClass(a:msg)
+  let dict = s:GetResultRecord(a:msg)
   if async == "stopped" || async == "running" || async == "thread-selected"
     return s:HandleCursor(async, dict)
   elseif async == "thread-group-started"
@@ -569,9 +578,11 @@ func s:RecordHandler(msg)
   elseif async == 'breakpoint-deleted'
     return s:HandleBreakpointDelete(dict)
   endif
+endfunc
 
-  " Result record
+func s:HandleResult(msg)
   let result = s:GetResultClass(a:msg)
+  let dict = s:GetResultRecord(a:msg)
   if result == 'done'
     let token = s:GetResultToken(a:msg)
     if str2nr(token) > 0 && has_key(s:callbacks, token)
@@ -583,6 +594,24 @@ func s:RecordHandler(msg)
   elseif result == 'error'
     return s:HandleError(dict)
   endif
+endfunc
+
+func s:HandleStream(msg)
+  " Ignore textual output from target
+  if a:msg[0] == '@'
+    return
+  endif
+  execute printf('let msg = %s', a:msg[1:])
+  " Join with messages from previous stream record
+  let total = split(s:stream_buf . msg, "\n", 1)
+  let lines = total[:-2]
+  let s:stream_buf = total[-1]
+  " Apply a user defined filter
+  if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
+    call filter(lines, 'stridx(v:val, "No such file") < 0')
+    call filter(lines, {k, v -> v !~ '^[0-9]\+\s*in\s*\f\+'})
+  endif
+  call s:PromptShowMessage(lines)
 endfunc
 
 " Handle stopping and running message from gdb.
@@ -1027,26 +1056,6 @@ func s:HandleDisassemble(addr, dict)
     call appendbufline(nr, "$", line)
   endfor
   call s:SelectAsmAddr(a:addr)
-endfunc
-
-func s:HandleStream(msg)
-  if a:msg[0] != '~' && a:msg[0] != '&'
-    return
-  endif
-
-  execute printf('let msg = %s', a:msg[1:])
-  " Remove escape sequence
-  let msg = substitute(msg, "\x1b\\[[0-9;]*m", "", "g")
-  " Join with messages from previous stream record
-  let total = split(s:stream_buf . msg, "\n", 1)
-  let lines = total[:-2]
-  let s:stream_buf = total[-1]
-  " Apply a user defined filter
-  if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
-    call filter(lines, 'stridx(v:val, "No such file") < 0')
-    call filter(lines, {k, v -> v !~ '^[0-9]\+\s*in\s*\f\+'})
-  endif
-  call s:PromptShowMessage(lines)
 endfunc
 
 func s:HandleFrame(regex, dict)
