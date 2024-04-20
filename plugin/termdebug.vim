@@ -280,7 +280,7 @@ func s:LaunchGdb()
   let s:gdb_job_id = jobstart(gdb_cmd, {
         \ 'on_stdout': function('s:CommJoin'),
         \ 'on_exit': function('s:EndTermDebug'),
-        \ 'pty': v:true
+        \ 'pty': v:false
         \ })
   if s:gdb_job_id == 0
     echo 'Invalid argument (or job table is full) while opening gdb terminal window'
@@ -339,14 +339,12 @@ func s:CreateSpecialBuffers()
 endfunc
 
 func s:CommJoin(job_id, msgs, event)
-  let s:comm_buf .= join(a:msgs, '')
-  let commands = split(s:comm_buf, "\r", 1)
-  if len(commands) > 1
-    for cmd in commands[:-2]
-      call s:CommOutput(cmd)
-    endfor
-    let s:comm_buf = commands[-1]
-  endif
+  for msg in a:msgs
+    let msg = substitute(msg, "[^[:print:]]", "", "g")
+    if !empty(msg) && msg !~ "^(gdb)"
+      call s:CommOutput(msg)
+    endif
+  endfor
 endfunc
 
 func s:CommOutput(msg)
