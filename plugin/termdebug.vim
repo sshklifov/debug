@@ -10,6 +10,11 @@ if !exists('g:termdebugger')
   let g:termdebugger = 'gdb'
 endif
 
+" Regex for up/down commands
+if !exists('g:termdebug_frame_regex')
+  let g:termdebug_frame_regex = '.*'
+endif
+
 " Highlights for sign column
 hi default link debugPC CursorLine
 hi default debugBreakpoint gui=reverse guibg=red
@@ -202,11 +207,6 @@ func TermDebugEvaluate(what)
   call TermDebugSendMICommand(cmd, Cb)
 endfunc
 
-func TermDebugGoUp(regex)
-  let Cb = function('s:HandleFrame', [a:regex])
-  call TermDebugSendMICommand('-stack-list-frames', Cb)
-endfunc
-
 func TermDebugBacktrace()
   call TermDebugSendMICommand('-stack-list-frames', function('s:HandleBacktrace'))
 endfunc
@@ -395,8 +395,9 @@ func s:PromptOutput(cmd)
     return
   endif
 
-  " Check if "command"
   let cmd = split(a:cmd, " ")
+  " Special commands
+
   if stridx("commands", cmd[0]) == 0 && len(cmd[0]) >= 3
     let brs = cmd[1:]
     if empty(brs)
@@ -418,10 +419,21 @@ func s:PromptOutput(cmd)
     return
   endif
 
+  if stridx("finish", cmd[0]) == 0 && len(cmd[0]) >= 3
+    return TermDebugSendMICommand('-exec-finish', function('s:Ignore'))
+  endif
+
+  if cmd[0] == "up"
+    return TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:true]))
+  endif
+  if cmd[0] == "down"
+    return TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:false]))
+  endif
+
   " Toggle asm mode based on instruction stepping
-  if a:cmd == "si" || a:cmd == "stepi" || a:cmd == "ni" || a:cmd == "nexti"
+  if cmd[0] == "si" || cmd[0] == "stepi" || cmd[0] == "ni" || cmd[0] == "nexti"
     call TermDebugSetAsmMode(1)
-  elseif a:cmd == "s" || a:cmd == "step" || a:cmd == "n" || a:cmd == "next"
+  elseif cmd[0] == "s" || cmd[0] == "step" || cmd[0] == "n" || cmd[0] == "next"
     call TermDebugSetAsmMode(0)
   endif
 
@@ -915,8 +927,14 @@ func s:Zip(keys, values) abort
 endfunc
 
 func s:Get(def, dict, ...) abort
+  if type(a:dict) != v:t_dict
+    throw "Invalid arguments, expecting dictionary as second argument"
+  endif
   let result = a:dict
   for key in a:000
+    if type(key) != v:t_string
+      throw "Invalid arguments, expecting string at third parameter and onwards"
+    endif
     if type(result) != v:t_dict || !has_key(result, key)
       return a:def
     endif
@@ -1073,11 +1091,22 @@ func s:HandleDisassemble(addr, dict)
   call s:SelectAsmAddr(a:addr)
 endfunc
 
-func s:HandleFrame(regex, dict)
+func s:HandleFrameLevel(going_up, dict)
+  let level = s:Get(0, a:dict, 'frame', 'level')
+  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameList', [a:going_up, level]))
+endfunc
+
+func s:HandleFrameList(going_up, level, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
+  if a:going_up
+    call filter(frames, "v:val.level > a:level")
+  else
+    call filter(frames, "v:val.level < a:level")
+    call reverse(frames)
+  endif
   for frame in frames
     let fullname = s:Get('', frame, 'fullname')
-    if filereadable(fullname) && match(fullname, a:regex) >= 0
+    if filereadable(fullname) && match(fullname, g:termdebug_frame_regex) >= 0
       if TermDebugIsStopped()
         let cmd = printf('-interpreter-exec console "frame %d"', frame['level'])
         call TermDebugSendMICommand(cmd, function('s:Ignore'))
