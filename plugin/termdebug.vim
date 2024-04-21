@@ -348,7 +348,14 @@ func s:CreateSpecialBuffers()
 endfunc
 
 func s:CommJoin(job_id, msgs, event)
+  if exists("g:termdebug_blocked")
+    return
+  endif
   for msg in a:msgs
+    if len(msg) > 30000
+      let g:termdebug_blocked = 1
+      throw printf("Abnormal message length detected (%d). To continue debugging, :unlet g:termdebug_blocked", len(msg))
+    endif
     let msg = substitute(msg, "[^[:print:]]", "", "g")
     if !empty(msg) && msg !~ "^(gdb)"
       call s:CommOutput(msg)
