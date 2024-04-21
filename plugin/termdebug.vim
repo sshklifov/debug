@@ -144,7 +144,6 @@ func TermDebugSendCommands(...)
 endfunc
 
 func TermDebugSetAsmMode(asm_mode)
-  let s:asm_mode = s:asm_mode ? 0 : 1
   if s:asm_mode != a:asm_mode
     let s:asm_mode = a:asm_mode
     call s:ClearCursorSign()
@@ -445,7 +444,7 @@ func s:PromptOutput(cmd)
     endif
   endif
 
-  if exists(g:termdebug_frame_regex)
+  if exists("g:termdebug_override_up_and_down") && g:termdebug_override_up_and_down
     if cmd[0] == "up"
       return TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:true]))
     endif
@@ -454,11 +453,16 @@ func s:PromptOutput(cmd)
     endif
   endif
 
-  " Toggle asm mode based on instruction stepping
-  if cmd[0] == "si" || cmd[0] == "stepi" || cmd[0] == "ni" || cmd[0] == "nexti"
-    call TermDebugSetAsmMode(1)
-  elseif cmd[0] == "s" || cmd[0] == "step" || cmd[0] == "n" || cmd[0] == "next"
-    call TermDebugSetAsmMode(0)
+  if exists("g:termdebug_override_s_and_n") && g:termdebug_override_s_and_n
+    if cmd[0] == "asm"
+      return TermDebugSetAsmMode(s:asm_mode ? 0 : 1)
+    endif
+    " Toggle asm mode based on instruction stepping
+    if cmd[0] == "si" || cmd[0] == "stepi" || cmd[0] == "ni" || cmd[0] == "nexti"
+      call TermDebugSetAsmMode(1)
+    elseif cmd[0] == "s" || cmd[0] == "step" || cmd[0] == "n" || cmd[0] == "next"
+      call TermDebugSetAsmMode(0)
+    endif
   endif
 
   " Regular command
@@ -1141,9 +1145,10 @@ func s:HandleFrameList(going_up, level, dict)
     call filter(frames, "v:val.level < a:level")
     call reverse(frames)
   endif
+  let prefix = "/home/" .. $USER
   for frame in frames
     let fullname = s:Get('', frame, 'fullname')
-    if filereadable(fullname) && match(fullname, g:termdebug_frame_regex) >= 0
+    if filereadable(fullname) && stridx(fullname, prefix) == 0
       if TermDebugIsStopped()
         let cmd = printf('-interpreter-exec console "frame %d"', frame['level'])
         call s:SendMICommandNoOutput(cmd)
@@ -1184,6 +1189,7 @@ func s:CollectThreads(pat, id, dict)
     return
   endif
   " Wait for all threads
+
   let list = []
   for key in keys(s:collected)
     for frame in s:collected[key]
@@ -1316,7 +1322,7 @@ func s:OpenPreview(title, lines)
 endfunc
 
 func s:OpenScrollablePreview(title, lines)
-  let winid = s:OpenPreview(title, lines)
+  let winid = s:OpenPreview(a:title, a:lines)
   call nvim_win_set_option(winid, 'cursorline', v:true)
   call nvim_win_set_option(winid, 'scrolloff', 2)
 endfunc
