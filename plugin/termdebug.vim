@@ -279,6 +279,8 @@ func s:LaunchGdb()
   let gdb_cmd .= ' -iex "set pagination off"'
   " Ignore inferior stdout 
   let gdb_cmd .= ' -iex "set inferior-tty /dev/null"'
+  " Remove the (gdb) prompt
+  let gdb_cmd .= ' -iex "set prompt"'
   " Launch GDB through ssh
   if exists("s:host")
     let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:host, gdb_cmd]
@@ -350,12 +352,22 @@ func s:CommJoin(job_id, msgs, event)
   if exists("s:termdebug_blocked")
     return
   endif
+  let capture = bufnr(s:capture_bufname)
   for msg in a:msgs
-    if len(msg) > 30000
+    " Check for long messages
+    if len(msg) > 4000
       let s:termdebug_blocked = 1
       let msg = printf('Abnormal message length detected (%d). Enter "unblock" to resume', len(msg))
       return s:PromptShowMessage(msg)
     endif
+    " Append to capture buf
+    let empty = nvim_buf_line_count(capture) == 1 && empty(nvim_buf_get_lines(capture, 0, 1, v:true)[0])
+    if empty
+      call setbufline(capture, 1, strtrans(msg))
+    else
+      call appendbufline(capture, "$", strtrans(msg))
+    endif
+    " Process message
     let msg = substitute(msg, "[^[:print:]]", "", "g")
     if !empty(msg) && msg !~ "^(gdb)"
       call s:CommOutput(msg)
@@ -364,15 +376,6 @@ func s:CommJoin(job_id, msgs, event)
 endfunc
 
 func s:CommOutput(msg)
-  " Add to capture buffer
-  let capture = bufnr(s:capture_bufname)
-  let empty = nvim_buf_line_count(capture) == 1 && empty(nvim_buf_get_lines(capture, 0, 1, v:true)[0])
-  if empty
-    call setbufline(capture, 1, strtrans(a:msg))
-  else
-    call appendbufline(capture, "$", strtrans(a:msg))
-  endif
-
   " Stream record
   if !empty(a:msg) && stridx("~@&", a:msg[0]) == 0
     return s:HandleStream(a:msg)
