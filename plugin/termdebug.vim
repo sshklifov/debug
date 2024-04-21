@@ -113,12 +113,18 @@ func TermDebugSendMICommand(cmd, Callback)
   call chansend(s:gdb_job_id, cmd . "\n")
 endfunc
 
+" Accepts either a console command or a C++ expression
+func s:EscapeMIArgument(arg)
+  " TODO buggy
+  return "\"" .. a:arg .. "\""
+endfunc
+
 func TermDebugSendCommand(cmd)
   if !TermDebugIsStopped()
     echo "Cannot send command. Program is running."
     return
   endif
-  let msg = printf('-interpreter-exec console "%s"', a:cmd)
+  let msg = '-interpreter-exec console ' .. s:EscapeMIArgument(a:cmd)
   call TermDebugSendMICommand(msg, function('s:Ignore'))
 endfunc
 
@@ -191,7 +197,7 @@ func TermDebugPrintMICommand(cmd)
 endfunc
 
 func TermDebugEvaluate(what)
-  let cmd = printf('-data-evaluate-expression "%s"', a:what)
+  let cmd = '-data-evaluate-expression ' .. s:EscapeMIArgument(a:what)
   let Cb = function('s:HandleEvaluate', [win_getid()])
   call TermDebugSendMICommand(cmd, Cb)
 endfunc
@@ -213,6 +219,7 @@ endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""""{{{
+let s:command_hist = []
 func TermDebugStart(...)
   if TermDebugIsOpen()
     echo 'Terminal debugger already running, cannot run two'
@@ -229,7 +236,9 @@ func TermDebugStart(...)
 
   " Remove all prior variables
   for varname in keys(s:)
-    exe "silent! unlet s:" . varname
+    if varname != "command_hist"
+      exe "silent! unlet s:" . varname
+    endif
   endfor
 
   " Names for created buffers
@@ -239,7 +248,6 @@ func TermDebugStart(...)
   " Set defaults for required variables
   let s:breakpoints = #{}
   let s:callbacks = #{}
-  let s:command_hist = []
   let s:pcbuf = -1
   let s:pid = 0
   let s:stopped = 1
@@ -382,7 +390,7 @@ func s:PromptOutput(cmd)
       call prompt_setprompt(bufnr(), '(gdb) ')
       unlet s:prompt_commands
     else
-      call add(s:prompt_commands, '"' . a:cmd .. '"')
+      call add(s:prompt_commands, s:EscapeMIArgument(a:cmd))
     endif
     return
   endif
@@ -418,7 +426,7 @@ func s:PromptOutput(cmd)
   endif
 
   " Regular command
-  let msg = printf('-interpreter-exec console "%s"', a:cmd)
+  let msg = '-interpreter-exec console ' . s:EscapeMIArgument(a:cmd)
   call TermDebugSendMICommand(msg, function('s:Ignore'))
 endfunc
 
@@ -455,9 +463,11 @@ func s:TabMap(expr)
     let inv_expr = (a:expr == "-1" ? "+1" : "-1")
     call s:ScrollPreview(inv_expr)
   elseif empty(s:GetCommandLine())
-    call s:OpenPreview("History", s:command_hist)
-    call s:ScrollPreview("$")
-    call s:ClosePreviewOn('InsertLeave', 'CursorMovedI')
+    if !empty(s:command_hist)
+      call s:OpenPreview("History", s:command_hist)
+      call s:ScrollPreview("$")
+      call s:ClosePreviewOn('InsertLeave', 'CursorMovedI')
+    endif
   else
     call s:OpenCompletion()
   endif
@@ -468,6 +478,10 @@ func s:ArrowMap(expr)
     call s:ScrollPreview(a:expr)
     return
   endif
+  if empty(s:command_hist)
+    return
+  endif
+
   " Quickly go to older history item
   if a:expr == '-1'
     if !exists('s:command_hist_idx')
@@ -536,7 +550,7 @@ endfunc
 func s:OpenCompletion()
   let cmd = s:GetCommandLine()
   let Cb = function('s:HandleCompletion', [cmd])
-  call TermDebugSendMICommand(printf('-complete "%s"', cmd), Cb)
+  call TermDebugSendMICommand('-complete ' . s:EscapeMIArgument(cmd), Cb)
 endfunc
 
 func s:GetCommandLine(...)
