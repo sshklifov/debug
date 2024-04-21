@@ -510,7 +510,7 @@ func s:TabMap(expr)
     call s:ScrollPreview(inv_expr)
   elseif empty(s:GetCommandLine())
     if !empty(s:command_hist)
-      call s:OpenPreview("History", s:command_hist)
+      call s:OpenScrollablePreview("History", s:command_hist)
       call s:ScrollPreview("$")
       call s:ClosePreviewOn('InsertLeave', 'CursorMovedI')
     endif
@@ -1084,7 +1084,7 @@ func s:HandleCompletion(cmd, dict)
   if len(a:cmd) > 0 && len(matches) > 0 && (bufname() == s:prompt_bufname)
     let context = split(a:cmd, " ", 1)[-1]
     let matches = map(matches, "context .. v:val[len(a:cmd):]")
-    call s:OpenPreview("Completion", matches)
+    call s:OpenScrollablePreview("Completion", matches)
     call s:ScrollPreview("1")
     call s:ClosePreviewOn('InsertLeave')
     augroup TermDebugCompletion
@@ -1308,13 +1308,17 @@ func s:OpenPreview(title, lines)
   endif
 
   call nvim_win_set_option(s:preview_win, 'wrap', v:false)
-  call nvim_win_set_option(s:preview_win, 'cursorline', v:true)
-  call nvim_win_set_option(s:preview_win, 'scrolloff', 2)
   if line('$', s:preview_win) > 1
     call deletebufline(nr, 1, '$')
   endif
   call setbufline(nr, 1, a:lines)
   return s:preview_win
+endfunc
+
+func s:OpenScrollablePreview(title, lines)
+  let winid = s:OpenPreview(title, lines)
+  call nvim_win_set_option(winid, 'cursorline', v:true)
+  call nvim_win_set_option(winid, 'scrolloff', 2)
 endfunc
 
 func s:IsOpenPreview(title)
