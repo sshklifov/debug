@@ -347,13 +347,14 @@ func s:CreateSpecialBuffers()
 endfunc
 
 func s:CommJoin(job_id, msgs, event)
-  if exists("g:termdebug_blocked")
+  if exists("s:termdebug_blocked")
     return
   endif
   for msg in a:msgs
     if len(msg) > 30000
-      let g:termdebug_blocked = 1
-      throw printf("Abnormal message length detected (%d). To continue debugging, :unlet g:termdebug_blocked", len(msg))
+      let s:termdebug_blocked = 1
+      let msg = printf('Abnormal message length detected (%d). Enter "unblock" to resume', len(msg))
+      return s:PromptShowMessage(msg)
     endif
     let msg = substitute(msg, "[^[:print:]]", "", "g")
     if !empty(msg) && msg !~ "^(gdb)"
@@ -426,6 +427,14 @@ func s:PromptOutput(cmd)
     return
   endif
 
+  if cmd[0] == "unblock"
+    if exists("s:termdebug_blocked")
+      unlet s:termdebug_blocked
+      call TermDebugSendMICommand('-stack-info-frame', function('s:PlaceCursorSign'))
+    endif
+    return
+  endif
+
   if exists('g:termdebug_override_finish_and_return') && g:termdebug_override_finish_and_return
     if stridx("finish", cmd[0]) == 0 && len(cmd[0]) >= 3
       let was_option = s:scheduler_locking
@@ -493,7 +502,8 @@ func s:PromptShowMessage(msg)
   " Apply a user defined filter
   if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
     call filter(lines, 'stridx(v:val, "No such file") < 0')
-    call filter(lines, {k, v -> v !~ '^[0-9]\+\s*in\s*\f\+'})
+    call filter(lines, {k, v -> v !~ '^\d\+\s*in\s*\f\+'})
+    call filter(lines, {k, v -> v !~ '^0x\x\+\s*\d*\s*in\s*\f\+'})
   endif
 
   let nr = bufnr(s:prompt_bufname)
