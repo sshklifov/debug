@@ -10,11 +10,6 @@ if !exists('g:termdebugger')
   let g:termdebugger = 'gdb'
 endif
 
-" Regex for up/down commands
-if !exists('g:termdebug_frame_regex')
-  let g:termdebug_frame_regex = '.*'
-endif
-
 " Highlights for sign column
 hi default link debugPC CursorLine
 hi default debugBreakpoint gui=reverse guibg=red
@@ -96,7 +91,7 @@ func TermDebugIsStopped()
 endfunc
 
 func TermDebugQuit()
-  call TermDebugSendMICommand('-gdb-exit', function("s:Ignore"))
+  call s:SendMICommandNoOutput('-gdb-exit')
 endfunc
 
 func TermDebugGetPid()
@@ -118,6 +113,11 @@ func TermDebugSendMICommand(cmd, Callback)
   call chansend(s:gdb_job_id, cmd . "\n")
 endfunc
 
+function s:SendMICommandNoOutput(cmd)
+  let IgnoreOutput = {_ -> {}}
+  return TermDebugSendMICommand(a:cmd, IgnoreOutput)
+endfunction
+
 " Accepts either a console command or a C++ expression
 func s:EscapeMIArgument(arg)
   " TODO buggy
@@ -130,7 +130,7 @@ func TermDebugSendCommand(cmd)
     return
   endif
   let msg = '-interpreter-exec console ' .. s:EscapeMIArgument(a:cmd)
-  call TermDebugSendMICommand(msg, function('s:Ignore'))
+  call s:SendMICommandNoOutput(msg)
 endfunc
 
 func TermDebugSendCommands(...)
@@ -177,7 +177,7 @@ func TermDebugQfToBr()
     let fname = fnamemodify(bufname(item['bufnr']), ":p")
     let lnum = item['lnum']
     let loc = fname . ":" . lnum
-    call TermDebugSendMICommand("-break-insert " . loc, function('s:Ignore'))
+    call s:SendMICommandNoOutput("-break-insert " . loc)
   endfor
   cclose
 endfunc
@@ -259,6 +259,7 @@ func TermDebugStart(...)
   if a:0 > 0
     let s:host = a:1
   endif
+  let s:scheduler_locking = "replay"
 
   call s:CreateSpecialBuffers()
 
@@ -386,7 +387,7 @@ func s:PromptOutput(cmd)
   if exists('s:prompt_commands')
     if a:cmd == 'end'
       let msg = printf('-break-commands %s', join(s:prompt_commands, " "))
-      call TermDebugSendMICommand(msg, function('s:Ignore'))
+      call s:SendMICommandNoOutput(msg)
       call prompt_setprompt(bufnr(), '(gdb) ')
       unlet s:prompt_commands
     else
@@ -419,15 +420,31 @@ func s:PromptOutput(cmd)
     return
   endif
 
-  if stridx("finish", cmd[0]) == 0 && len(cmd[0]) >= 3
-    return TermDebugSendMICommand('-exec-finish', function('s:Ignore'))
+  if exists('g:termdebug_override_finish_and_return') && g:termdebug_override_finish_and_return
+    if stridx("finish", cmd[0]) == 0 && len(cmd[0]) >= 3
+      let was_option = s:scheduler_locking
+      call s:SendMICommandNoOutput('-gdb-set scheduler-locking on')
+      call s:SendMICommandNoOutput('-exec-finish')
+      call s:SendMICommandNoOutput('-gdb-set scheduler-locking ' . was_option)
+      return
+    endif
+
+    if stridx("return", cmd[0]) == 0 && len(cmd[0]) >= 3
+      let was_option = s:scheduler_locking
+      call s:SendMICommandNoOutput('-gdb-set scheduler-locking on')
+      call s:SendMICommandNoOutput('-interpreter-exec console finish')
+      call s:SendMICommandNoOutput('-gdb-set scheduler-locking ' . was_option)
+      return
+    endif
   endif
 
-  if cmd[0] == "up"
-    return TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:true]))
-  endif
-  if cmd[0] == "down"
-    return TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:false]))
+  if exists(g:termdebug_frame_regex)
+    if cmd[0] == "up"
+      return TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:true]))
+    endif
+    if cmd[0] == "down"
+      return TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:false]))
+    endif
   endif
 
   " Toggle asm mode based on instruction stepping
@@ -439,7 +456,7 @@ func s:PromptOutput(cmd)
 
   " Regular command
   let msg = '-interpreter-exec console ' . s:EscapeMIArgument(a:cmd)
-  call TermDebugSendMICommand(msg, function('s:Ignore'))
+  call s:SendMICommandNoOutput(msg)
 endfunc
 
 func s:PromptInterrupt()
@@ -457,9 +474,19 @@ func s:PromptInterrupt()
 endfunc
 
 func s:PromptShowMessage(msg)
+  if type(a:msg) == v:t_list
+    let lines = a:msg
+  else
+    let lines = [a:msg]
+  endif
+  " Apply a user defined filter
+  if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
+    call filter(lines, 'stridx(v:val, "No such file") < 0')
+    call filter(lines, {k, v -> v !~ '^[0-9]\+\s*in\s*\f\+'})
+  endif
+
   let nr = bufnr(s:prompt_bufname)
-  let lines = nvim_buf_line_count(nr)
-  call appendbufline(nr, lines - 1, a:msg)
+  call appendbufline(nr, nvim_buf_line_count(nr) - 1, lines)
 endfunc
 
 func s:DeleteWord()
@@ -604,6 +631,8 @@ func s:HandleAsync(msg)
     return s:HandleNewBreakpoint(dict)
   elseif async == 'breakpoint-deleted'
     return s:HandleBreakpointDelete(dict)
+  elseif async == 'cmd-param-changed'
+    return s:HandleOption(dict)
   endif
 endfunc
 
@@ -633,11 +662,6 @@ func s:HandleStream(msg)
   let total = split(s:stream_buf . msg, "\n", 1)
   let lines = total[:-2]
   let s:stream_buf = total[-1]
-  " Apply a user defined filter
-  if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
-    call filter(lines, 'stridx(v:val, "No such file") < 0')
-    call filter(lines, {k, v -> v !~ '^[0-9]\+\s*in\s*\f\+'})
-  endif
   call s:PromptShowMessage(lines)
 endfunc
 
@@ -820,6 +844,12 @@ func s:PlaceBreakpointSign(id)
       let extmark = nvim_buf_set_extmark(bufnr, ns, breakpoint['lnum'] - 1, 0, opts)
       let s:breakpoints[a:id]['extmark'] = extmark
     endif
+  endif
+endfunc
+
+func s:HandleOption(dict)
+  if a:dict['param'] == 'scheduler-locking'
+    let s:scheduler_locking = a:dict['value']
   endif
 endfunc
 " }}}
@@ -1109,7 +1139,7 @@ func s:HandleFrameList(going_up, level, dict)
     if filereadable(fullname) && match(fullname, g:termdebug_frame_regex) >= 0
       if TermDebugIsStopped()
         let cmd = printf('-interpreter-exec console "frame %d"', frame['level'])
-        call TermDebugSendMICommand(cmd, function('s:Ignore'))
+        call s:SendMICommandNoOutput(cmd)
       endif
       return
     endif
@@ -1165,9 +1195,8 @@ func s:CollectThreads(pat, id, dict)
 endfunc
 
 func s:HandleError(dict)
-  let msg = a:dict['msg']
-  " Do it this way to print the new lines
-  exe "echo " . string(msg)
+  let lines = split(a:dict['msg'], "\n")
+  call s:PromptShowMessage(lines)
 endfunc
 "}}}
 
@@ -1380,8 +1409,5 @@ func s:BufRead()
       call s:PlaceBreakpointSign(key)
     endif
   endfor
-endfunc
-
-func s:Ignore(...)
 endfunc
 " }}}
