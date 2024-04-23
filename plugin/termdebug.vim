@@ -848,13 +848,10 @@ endfunc
 func s:HandleBreakpointDelete(dict)
   let id = a:dict['id']
   call s:ClearBreakpointSign(id)
-  " Might be watchpoint that was deleted, so check first
-  if has_key(s:breakpoints, id)
-    unlet s:breakpoints[id]
-  endif
 endfunc
 
 func s:ClearBreakpointSign(id)
+  " Might be watchpoint that was deleted, so check first
   if has_key(s:breakpoints, a:id)
     let breakpoint = s:breakpoints[a:id]
     if has_key(breakpoint, "extmark")
@@ -865,6 +862,7 @@ func s:ClearBreakpointSign(id)
         call nvim_buf_del_extmark(bufnr, ns, extmark)
       endif
     endif
+    unlet s:breakpoints[id]
   endif
 endfunc
 
