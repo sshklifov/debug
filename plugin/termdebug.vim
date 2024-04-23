@@ -350,6 +350,11 @@ func s:CreateSpecialBuffers()
   call setbufvar(nr, '&tabstop', 8)
 endfunc
 
+func s:CommReset(timer_id)
+  let s:comm_buf = ""
+  call s:PromptShowWarning("Communication with GDB reset")
+endfunc
+
 func s:CommJoin(job_id, msgs, event)
   let capture = bufnr(s:capture_bufname)
   for msg in a:msgs
@@ -366,8 +371,15 @@ func s:CommJoin(job_id, msgs, event)
       try
         call s:CommOutput(msg)
         let s:comm_buf = ""
+        if exists('s:comm_timer')
+          call timer_stop(s:comm_timer)
+          unlet s:comm_timer
+        endif
       catch /EvalFailedException/
         let s:comm_buf = msg
+        if !exists('s:comm_timer')
+          let s:comm_timer = timer_start(4000, function('s:CommReset'))
+        endif
       endtry
     endif
   endfor
