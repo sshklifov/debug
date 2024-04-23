@@ -485,37 +485,50 @@ func s:PromptOutput(cmd)
 endfunc
 
 func s:PromptInterrupt()
-  " Cancel partially written command
-  call s:SetCommandLine("")
-  " Send interrupt
-  let interrupt = 2
-  if !exists('s:host')
-    let pid = jobpid(s:gdb_job_id)
-    call v:lua.vim.loop.kill(pid, interrupt)
+  if TermDebugIsStopped()
+    " Clear command line
+    let nr = bufnr(s:prompt_bufname)
+    let input = getbufline(nr, '$')[0]
+    call s:PromptShowMessage([[input, "Normal"], ["^C", "Cursor"]])
   else
-    let kill = printf("kill -%d %d", interrupt, s:pid)
-    call system(["ssh", s:host, kill])
+    " Send interrupt
+    let interrupt = 2
+    if !exists('s:host')
+      let pid = jobpid(s:gdb_job_id)
+      call v:lua.vim.loop.kill(pid, interrupt)
+    else
+      let kill = printf("kill -%d %d", interrupt, s:pid)
+      call system(["ssh", s:host, kill])
+    endif
   endif
+  call s:SetCommandLine("")
 endfunc
 
-func s:PromptShowMessage(msg, hl_group)
+func s:PromptShowMessage(msg)
   let nr = bufnr(s:prompt_bufname)
-  let line = nvim_buf_line_count(nr) - 1
-  call appendbufline(nr, line, a:msg)
+  let lnum = nvim_buf_line_count(nr) - 1
+  let line = join(map(copy(a:msg), "v:val[0]"), '')
+  call appendbufline(nr, lnum, line)
+
   let ns = nvim_create_namespace('TermDebugHighlight')
-  call nvim_buf_set_extmark(nr, ns, line, 0, #{line_hl_group: a:hl_group})
+  let end_col = 0
+  for [msg, hl_group] in a:msg
+    let start_col = end_col
+    let end_col = start_col + len(msg)
+    call nvim_buf_set_extmark(nr, ns, lnum, start_col, #{end_col: end_col, hl_group: hl_group})
+  endfor
 endfunc
 
 func s:PromptShowNormal(msg)
-  call s:PromptShowMessage(a:msg, "Normal")
+  call s:PromptShowMessage([[a:msg, "Normal"]])
 endfunc
 
 func s:PromptShowWarning(msg)
-  call s:PromptShowMessage(a:msg, "WarningMsg")
+  call s:PromptShowMessage([[a:msg, "WarningMsg"]])
 endfunc
 
 func s:PromptShowError(msg)
-  call s:PromptShowMessage(a:msg, "ErrorMsg")
+  call s:PromptShowMessage([[a:msg, "ErrorMsg"]])
 endfunc
 
 func s:DeleteWord()
@@ -1280,7 +1293,9 @@ endfunc
 
 func s:HandleError(dict)
   let lines = split(a:dict['msg'], "\n")
-  call s:PromptShowError(lines)
+  for line in lines
+    call s:PromptShowError(line)
+  endfor
 endfunc
 "}}}
 
