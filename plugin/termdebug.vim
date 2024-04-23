@@ -411,7 +411,7 @@ func s:PromptOutput(cmd)
     let brs = cmd[1:]
     if empty(brs)
       if empty(s:breakpoints)
-        call s:PromptShowMessage("No breakpoints")
+        call s:PromptShowNormal("No breakpoints")
         return
       else
         call add(brs, max(map(keys(s:breakpoints), "str2nr(v:val)")))
@@ -419,7 +419,7 @@ func s:PromptOutput(cmd)
     endif
     for brk in brs
       if !has_key(s:breakpoints, brk)
-        call s:PromptShowMessage("No breakpoint number " . brk)
+        call s:PromptShowNormal("No breakpoint number " . brk)
         return
       endif
     endfor
@@ -486,21 +486,24 @@ func s:PromptInterrupt()
   endif
 endfunc
 
-func s:PromptShowMessage(msg)
-  if type(a:msg) == v:t_list
-    let lines = a:msg
-  else
-    let lines = [a:msg]
-  endif
-  " Apply a user defined filter
-  if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
-    call filter(lines, 'stridx(v:val, "No such file") < 0')
-    call filter(lines, {k, v -> v !~ '^\d\+\s*in\s*\f\+'})
-    call filter(lines, {k, v -> v !~ '^0x\x\+\s*\d*\s*in\s*\f\+'})
-  endif
-
+func s:PromptShowMessage(msg, hl_group)
   let nr = bufnr(s:prompt_bufname)
-  call appendbufline(nr, nvim_buf_line_count(nr) - 1, lines)
+  let line = nvim_buf_line_count(nr) - 1
+  call appendbufline(nr, line, a:msg)
+  let ns = nvim_create_namespace('TermDebugHighlight')
+  call nvim_buf_set_extmark(nr, ns, line, 0, #{line_hl_group: a:hl_group})
+endfunc
+
+func s:PromptShowNormal(msg)
+  call s:PromptShowMessage(a:msg, "Normal")
+endfunc
+
+func s:PromptShowWarning(msg)
+  call s:PromptShowMessage(a:msg, "WarningMsg")
+endfunc
+
+func s:PromptShowError(msg)
+  call s:PromptShowMessage(a:msg, "ErrorMsg")
 endfunc
 
 func s:DeleteWord()
@@ -676,7 +679,16 @@ func s:HandleStream(msg)
   let total = split(s:stream_buf . msg, "\n", 1)
   let lines = total[:-2]
   let s:stream_buf = total[-1]
-  call s:PromptShowMessage(lines)
+  " Apply a custom filter
+  if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
+    call filter(lines, 'stridx(v:val, "No such file") < 0')
+    call filter(lines, {k, v -> v !~ '^\d\+\s*in\s*\f\+'})
+    call filter(lines, {k, v -> v !~ '^0x\x\+\s*\d*\s*in\s*\f\+'})
+  endif
+  " Show as normal text
+  for line in lines
+    call s:PromptShowNormal(lines)
+  endfor
 endfunc
 
 " Handle stopping and running message from gdb.
@@ -1071,7 +1083,7 @@ func s:OnBrEditComplete(bp)
 
   let commands = map(commands, {k, v -> '"' . v . '"'})
   let msg = printf("-break-commands %d %s", a:bp, join(commands, " "))
-  call TermDebugSendMICommand(msg, {_ -> s:PromptShowMessage("Breakpoint commands updated")})
+  call TermDebugSendMICommand(msg, {_ -> s:PromptShowNormal("Breakpoint commands updated")})
 endfunc
 
 func s:HandleSymbolInfo(dict)
@@ -1247,7 +1259,7 @@ endfunc
 
 func s:HandleError(dict)
   let lines = split(a:dict['msg'], "\n")
-  call s:PromptShowMessage(lines)
+  call s:PromptShowError(lines)
 endfunc
 "}}}
 
