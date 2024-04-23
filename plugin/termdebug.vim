@@ -285,8 +285,8 @@ func s:LaunchGdb()
   call extend(gdb_cmd, ['-iex', 'set prompt'])
   " Launch GDB through ssh
   if exists("s:host")
-    let gdb_str = join(gdb_cmd, ' ')
-    let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:host, gdb_str]
+    let gdb_str = join(map(gdb_cmd, 'shellescape(v:val)'), ' ')
+    let gdb_cmd = ['ssh', '-T', '-o', 'ConnectTimeout 1', s:host, gdb_str]
   endif
 
   let s:gdbwin = win_getid(winnr())
