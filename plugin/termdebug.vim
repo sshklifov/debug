@@ -272,20 +272,21 @@ func TermDebugStart(...)
 endfunc
 
 func s:LaunchGdb()
-  let gdb_cmd = g:termdebugger
+  let gdb_cmd = [g:termdebugger]
   " Add -quiet to avoid the intro message causing a hit-enter prompt.
-  let gdb_cmd .= ' -quiet'
+  call add(gdb_cmd, '-quiet')
   " Communicate with GDB in the background via MI interface
-  let gdb_cmd .= ' --interpreter=mi'
+  call add(gdb_cmd, '--interpreter=mi')
   " Disable pagination, it causes everything to stop at the gdb
-  let gdb_cmd .= ' -iex "set pagination off"'
+  call extend(gdb_cmd, ['-iex', 'set pagination off'])
   " Ignore inferior stdout 
-  let gdb_cmd .= ' -iex "set inferior-tty /dev/null"'
+  call extend(gdb_cmd, ['-iex', 'set inferior-tty /dev/null'])
   " Remove the (gdb) prompt
-  let gdb_cmd .= ' -iex "set prompt"'
+  call extend(gdb_cmd, ['-iex', 'set prompt'])
   " Launch GDB through ssh
   if exists("s:host")
-    let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:host, gdb_cmd]
+    let gdb_str = join(gdb_cmd, ' ')
+    let gdb_cmd = ['ssh', '-t', '-o', 'ConnectTimeout 1', s:host, gdb_str]
   endif
 
   let s:gdbwin = win_getid(winnr())
