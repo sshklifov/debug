@@ -699,7 +699,7 @@ func s:HandleStream(msg)
   endif
   " Show as normal text
   for line in lines
-    call s:PromptShowNormal(lines)
+    call s:PromptShowNormal(line)
   endfor
 endfunc
 
@@ -862,7 +862,7 @@ func s:ClearBreakpointSign(id)
         call nvim_buf_del_extmark(bufnr, ns, extmark)
       endif
     endif
-    unlet s:breakpoints[id]
+    unlet s:breakpoints[a:id]
   endif
 endfunc
 
