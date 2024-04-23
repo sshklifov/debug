@@ -244,6 +244,8 @@ func TermDebugStart(...)
   const s:capture_bufname = "Gdb capture"
   const s:asm_bufname = "Gdb disas"
   const s:prompt_bufname = "Gdb terminal"
+  " Exceptions thrown
+  const s:eval_exception = "EvalFailedException"
   " Set defaults for required variables
   let s:breakpoints = #{}
   let s:callbacks = #{}
@@ -349,17 +351,8 @@ func s:CreateSpecialBuffers()
 endfunc
 
 func s:CommJoin(job_id, msgs, event)
-  if exists("s:termdebug_blocked")
-    return
-  endif
   let capture = bufnr(s:capture_bufname)
   for msg in a:msgs
-    " Check for long messages
-    if len(msg) > 4000
-      let s:termdebug_blocked = 1
-      let msg = printf('Abnormal message length detected (%d). Enter "unblock" to resume', len(msg))
-      return s:PromptShowMessage(msg)
-    endif
     " Append to capture buf
     let empty = nvim_buf_line_count(capture) == 1 && empty(nvim_buf_get_lines(capture, 0, 1, v:true)[0])
     if empty
@@ -368,9 +361,14 @@ func s:CommJoin(job_id, msgs, event)
       call appendbufline(capture, "$", strtrans(msg))
     endif
     " Process message
-    let msg = substitute(msg, "[^[:print:]]", "", "g")
+    let msg = s:comm_buf .. msg
     if !empty(msg) && msg !~ "^(gdb)"
-      call s:CommOutput(msg)
+      try
+        call s:CommOutput(msg)
+        let s:comm_buf = ""
+      catch /EvalFailedException/
+        let s:comm_buf = msg
+      endtry
     endif
   endfor
 endfunc
@@ -427,14 +425,6 @@ func s:PromptOutput(cmd)
     endfor
     let s:prompt_commands = brs
     call prompt_setprompt(bufnr(), 'command> ')
-    return
-  endif
-
-  if cmd[0] == "unblock"
-    if exists("s:termdebug_blocked")
-      unlet s:termdebug_blocked
-      call TermDebugSendMICommand('-stack-info-frame', function('s:PlaceCursorSign'))
-    endif
     return
   endif
 
@@ -646,7 +636,7 @@ endfunc
 """"""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
 func s:HandleAsync(msg)
   let async = s:GetAsyncClass(a:msg)
-  let dict = s:GetResultRecord(a:msg)
+  let dict = EvalCommaResults(a:msg)
   if async == "stopped" || async == "running" || async == "thread-selected"
     return s:HandleCursor(async, dict)
   elseif async == "thread-group-started"
@@ -662,7 +652,7 @@ endfunc
 
 func s:HandleResult(msg)
   let result = s:GetResultClass(a:msg)
-  let dict = s:GetResultRecord(a:msg)
+  let dict = EvalCommaResults(a:msg)
   if result == 'done'
     let token = s:GetResultToken(a:msg)
     if str2nr(token) > 0 && has_key(s:callbacks, token)
@@ -879,7 +869,18 @@ endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Eval""""""""""""""""""""""""""""""""""""""""""{{{
-func s:GetResultRecord(msg) abort
+function s:EvalThrow(msg, ...)
+  if a:0 == 1
+    let msg = printf(a:msg, a:1)
+  elseif a:0 == 2
+    let msg = printf(a:msg, a:1, a:2)
+  else
+    let msg = a:msg
+  endif
+  throw s:eval_exception .. ": " .. msg
+endfunction
+
+func EvalCommaResults(msg) abort
   let idx = stridx(a:msg, ',')
   if idx < 0
     return #{}
@@ -892,13 +893,22 @@ func s:GetResultRecord(msg) abort
     let v = values(head)[0]
     let dict[k] = v
   endwhile
+  if !empty(rest)
+    call s:EvalThrow("Trailing characters: %s", rest[0:4])
+  endif
   return dict
 endfunc
 
 func s:EvalResult(msg) abort
-  let eq = stridx(a:msg, '=')
-  let varname = a:msg[:eq-1]
-  let [value, rest] = s:EvalValue(a:msg[eq+1:])
+  let varname = matchstr(a:msg, '^[a-z_-]\+')
+  if len(varname) == 0
+    call s:EvalThrow("Expecting variable name but got: %s", a:msg[0:0])
+  endif
+  let eq_idx = len(varname)
+  if a:msg[eq_idx] != '='
+    call s:EvalThrow("Expecting assignment but got: %s", a:msg[eq_idx:eq_idx])
+  endif
+  let [value, rest] = s:EvalValue(a:msg[eq_idx+1:])
   let result = {varname: value}
   return [result, rest]
 endfunc
@@ -906,12 +916,16 @@ endfunc
 func s:EvalValue(msg) abort
   if a:msg[0] == '"'
     return s:EvalString(a:msg)
-  elseif a:msg[1] == '"' || a:msg[1] == '{' || a:msg[1] == '['
-    " No keys, just values
-    return s:EvalList(a:msg)
+  elseif a:msg[0] == '{' || a:msg[0] == '['
+    if a:msg[1] == '"' || a:msg[1] == '{' || a:msg[1] == '['
+      " No keys, just values
+      return s:EvalList(a:msg)
+    else
+      " Key=Value pairs
+      return s:EvalTuple(a:msg)
+    endif
   else
-    " Key=Value pairs
-    return s:EvalTuple(a:msg)
+    call s:EvalThrow("Expecting value but got: %s", a:msg[0:0])
   endif
 endfunc
 
@@ -922,18 +936,27 @@ func s:EvalString(msg) abort
     if a:msg[idx] == '\'
       let idx += 1
     elseif a:msg[idx] == '"'
-      break
+      return [eval(a:msg[:idx]), a:msg[idx+1:]]
     endif
     let idx += 1
   endwhile
-  return [eval(a:msg[:idx]), a:msg[idx+1:]]
+  call s:EvalThrow("Unterminated c-string")
+endfunc
+
+func s:CheckBracketsMatch(open, close) abort
+  if a:open == '[' && a:close == ']'
+    return v:true
+  elseif a:open == '{' && a:close == '}'
+    return v:true
+  endif
+  call s:EvalThrow("Bracket mismatch: %s and %s", a:open, a:close)
 endfunc
 
 func s:EvalTuple(msg) abort
   if a:msg[1] == ']' || a:msg[1] == '}'
-    let empty = []
+    call s:CheckBracketsMatch(a:msg[0], a:msg[1])
     let rest = a:msg[2:]
-    return [empty, rest]
+    return [[], rest]
   endif
 
   let [head, rest] = s:EvalResult(a:msg[1:])
@@ -944,11 +967,12 @@ func s:EvalTuple(msg) abort
     call extend(keys, keys(head))
     call extend(values, values(head))
   endwhile
+  call s:CheckBracketsMatch(a:msg[0], rest[0])
   let rest = rest[1:]
 
   " Patch GDB's weird idea of a tuple
-  let equal_keys = len(keys) > 1 && keys[0] == keys[1]
-  if equal_keys
+  let dup_keys = len(keys) > 1 && keys[0] == keys[1]
+  if dup_keys
     return [values, rest]
   endif
   let dict = s:Zip(keys, values)
@@ -957,9 +981,9 @@ endfunc
 
 func s:EvalList(msg) abort
   if a:msg[1] == ']' || a:msg[1] == '}'
-    let empty = []
+    call s:CheckBracketsMatch(a:msg[0], a:msg[1])
     let rest = a:msg[2:]
-    return [empty, rest]
+    return [[], rest]
   endif
 
   let [head, rest] = s:EvalValue(a:msg[1:])
@@ -968,6 +992,7 @@ func s:EvalList(msg) abort
     let [head, rest] = s:EvalValue(rest[1:])
     call add(list, head)
   endwhile
+  call s:CheckBracketsMatch(a:msg[0], rest[0])
   let rest = rest[1:]
   return [list, rest]
 endfunc
