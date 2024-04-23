@@ -260,6 +260,9 @@ func TermDebugStart(...)
   if a:0 > 0
     let s:host = a:1
   endif
+  if a:0 > 1
+    let s:user = a:2
+  endif
   let s:scheduler_locking = "replay"
 
   call s:CreateSpecialBuffers()
@@ -283,9 +286,17 @@ func s:LaunchGdb()
   call extend(gdb_cmd, ['-iex', 'set inferior-tty /dev/null'])
   " Remove the (gdb) prompt
   call extend(gdb_cmd, ['-iex', 'set prompt'])
+  " Limit completions for faster TAB autocomplete
+  call extend(gdb_cmd, ['-iex', 'set max-completions 20'])
+  " Do not open a shell to run inferior
+  call extend(gdb_cmd, ['-iex', 'set startup-with-shell off'])
   " Launch GDB through ssh
   if exists("s:host")
     let gdb_str = join(map(gdb_cmd, 'shellescape(v:val)'), ' ')
+    " Also change the effective user
+    if exists("s:user")
+      let gdb_str = printf("sudo -u %s %s", s:user, gdb_str)
+    endif
     let gdb_cmd = ['ssh', '-T', '-o', 'ConnectTimeout 1', s:host, gdb_str]
   endif
 
@@ -345,10 +356,13 @@ func s:CreateSpecialBuffers()
   let nr = bufnr(s:prompt_bufname)
   call setbufvar(nr, '&buftype', 'prompt')
   " Display tabs properly
-  call setbufvar(nr, '&expandtab', v:false)
-  call setbufvar(nr, '&smarttab', v:false)
-  call setbufvar(nr, '&softtabstop', 0)
-  call setbufvar(nr, '&tabstop', 8)
+  for name in [s:asm_bufname, s:prompt_bufname]
+    let nr = bufnr(name)
+    call setbufvar(nr, '&expandtab', v:false)
+    call setbufvar(nr, '&smarttab', v:false)
+    call setbufvar(nr, '&softtabstop', 0)
+    call setbufvar(nr, '&tabstop', 8)
+  endfor
 endfunc
 
 func s:CommReset(timer_id)
@@ -791,6 +805,7 @@ func s:SelectAsmAddr(addr)
   call TermDebugGoToSource()
   if bufname() != s:asm_bufname
     exe "e " . s:asm_bufname
+    call setbufvar("%", '&list', v:false)
   endif
 
   let lnum = search('^' . a:addr)
