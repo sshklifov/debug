@@ -819,27 +819,27 @@ func s:HandleNewBreakpoint(dict)
     return
   endif
 
-  let id = bkpt['number']
-  call s:ClearBreakpointSign(id)
-
-  if has_key(bkpt, 'fullname')
-    let s:breakpoints[id] = #{
-          \ fullname: bkpt['fullname'],
-          \ lnum: bkpt['line'],
-          \ enabled: bkpt['enabled'] == 'y'
-          \ }
-    call s:PlaceBreakpointSign(id)
-  elseif has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
+  if has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
     for location in bkpt['locations']
       let id = location['number']
       call s:ClearBreakpointSign(id)
       let s:breakpoints[id] = #{
             \ fullname: location['fullname'],
             \ lnum: location['line'],
-            \ enabled: location['enabled'] == 'y' && bkpt['enabled'] == 'y'
+            \ enabled: location['enabled'] == 'y' && bkpt['enabled'] == 'y',
+            \ parent: bkpt['number']
             \ }
       call s:PlaceBreakpointSign(id)
     endfor
+  elseif has_key(bkpt, 'fullname')
+    let id = bkpt['number']
+    call s:ClearBreakpointSign(id)
+    let s:breakpoints[id] = #{
+          \ fullname: bkpt['fullname'],
+          \ lnum: bkpt['line'],
+          \ enabled: bkpt['enabled'] == 'y'
+          \ }
+    call s:PlaceBreakpointSign(id)
   endif
 endfunc
 
@@ -848,6 +848,7 @@ endfunc
 func s:HandleBreakpointDelete(dict)
   let id = a:dict['id']
   call s:ClearBreakpointSign(id)
+  call s:ClearMultiBreakpointSigns(id)
 endfunc
 
 func s:ClearBreakpointSign(id)
@@ -866,6 +867,13 @@ func s:ClearBreakpointSign(id)
   endif
 endfunc
 
+func s:ClearMultiBreakpointSigns(id)
+  let brks = filter(copy(s:breakpoints), 'has_key(v:val, "parent") && v:val.parent == a:id')
+  for id in keys(brks)
+    call s:ClearBreakpointSign(id)
+  endfor
+endfunc
+
 func s:PlaceBreakpointSign(id)
   if has_key(s:breakpoints, a:id)
     let breakpoint = s:breakpoints[a:id]
@@ -874,7 +882,10 @@ func s:PlaceBreakpointSign(id)
     if bufnr > 0 && !placed
       call bufload(bufnr)
       let ns = nvim_create_namespace('TermDebugBr')
-      let text = len(a:id) <= 2 ? a:id : "*"
+      let text = has_key(breakpoint, 'parent') ? breakpoint['parent'] : a:id
+      if len(text) > 2
+        let text = "*"
+      endif
       let hl_group = breakpoint['enabled'] ? 'debugBreakpoint' : 'debugBreakpointDisabled'
       let opts = #{sign_text: text, sign_hl_group: hl_group}
       let extmark = nvim_buf_set_extmark(bufnr, ns, breakpoint['lnum'] - 1, 0, opts)
