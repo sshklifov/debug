@@ -455,6 +455,11 @@ func s:PromptOutput(cmd)
     return
   endif
 
+  if stridx("python", cmd[0]) == 0 && len(cmd[0]) >= 2
+    call s:PromptShowError("No python support yet!")
+    return
+  endif
+
   if exists('g:termdebug_override_finish_and_return') && g:termdebug_override_finish_and_return
     if stridx("finish", cmd[0]) == 0 && len(cmd[0]) >= 3
       let was_option = s:scheduler_locking
