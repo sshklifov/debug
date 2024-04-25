@@ -227,6 +227,7 @@ endfunc
 
 """"""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""""{{{
 let s:command_hist = []
+
 func TermDebugStart(...)
   if TermDebugIsOpen()
     echo 'Terminal debugger already running, cannot run two'
@@ -328,9 +329,11 @@ func s:LaunchGdb()
   call prompt_setprompt(bufnr(), '(gdb) ')
   call prompt_setcallback(bufnr(), function('s:PromptOutput'))
   call prompt_setinterrupt(bufnr(), function('s:PromptInterrupt'))
+
   augroup TermDebug
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
   augroup END
+
   inoremap <buffer> <C-d> <cmd>call TermDebugQuit()<CR>
   inoremap <buffer> <C-w> <cmd>call <SID>DeleteWord()<CR>
   inoremap <buffer> <Up> <cmd>call <SID>ArrowMap("-1")<CR>
@@ -338,6 +341,7 @@ func s:LaunchGdb()
   inoremap <buffer> <Tab> <cmd>call <SID>TabMap("+1")<CR>
   inoremap <buffer> <S-Tab> <cmd>call <SID>TabMap("-1")<CR>
   inoremap <buffer> <CR> <cmd>call <SID>EnterMap()<CR>
+
   startinsert
 endfunc
 
