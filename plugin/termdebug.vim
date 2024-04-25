@@ -400,23 +400,137 @@ func s:CommJoin(job_id, msgs, event)
   endfor
 endfunc
 
-func s:CommOutput(msg)
-  " Stream record
-  if !empty(a:msg) && stridx("~@&", a:msg[0]) == 0
-    return s:HandleStream(a:msg)
-  endif
-  " Async record
-  let async = s:GetAsyncClass(a:msg)
-  if !empty(async)
-    return s:HandleAsync(a:msg)
-  endif
-  " Result record
-  let result = s:GetResultClass(a:msg)
-  if !empty(result)
-    return s:HandleResult(a:msg)
+func s:DeleteWord()
+  let [cmd_pre, cmd_post] = s:GetCommandLine(2)
+  let cmd_pre = substitute(cmd_pre, '\S*\s*$', '', '')
+  call s:SetCommandLine(cmd_pre . cmd_post, len(cmd_pre))
+endfunc
+
+func s:TabMap(expr)
+  if s:IsOpenPreview('Completion')
+    call s:ScrollPreview(a:expr)
+  elseif s:IsOpenPreview('History')
+    let inv_expr = (a:expr == "-1" ? "+1" : "-1")
+    call s:ScrollPreview(inv_expr)
+  elseif empty(s:GetCommandLine())
+    if !empty(s:command_hist)
+      call s:OpenScrollablePreview("History", s:command_hist)
+      call s:ScrollPreview("$")
+      call s:ClosePreviewOn('InsertLeave', 'CursorMovedI')
+    endif
+  else
+    call s:OpenCompletion()
   endif
 endfunc
 
+func s:ArrowMap(expr)
+  if s:IsOpenPreview("Completion") || s:IsOpenPreview("History")
+    call s:ScrollPreview(a:expr)
+    return
+  endif
+  if empty(s:command_hist)
+    return
+  endif
+
+  " Quickly go to older history item
+  if a:expr == '-1'
+    if !exists('s:command_hist_idx')
+      let s:command_hist_idx = len(s:command_hist)
+      call add(s:command_hist, s:GetCommandLine())
+      augroup TermDebugHistory
+        autocmd! InsertLeave * call s:EndHistoryScrolling(1)
+        autocmd! CursorMovedI * call s:EndHistoryScrolling(0)
+      augroup END
+    endif
+    let s:command_hist_idx = max([s:command_hist_idx - 1, 0])
+  elseif a:expr == '+1'
+    if !exists('s:command_hist_idx')
+      return
+    endif
+    let s:command_hist_idx = min([s:command_hist_idx + 1, len(s:command_hist) - 1])
+  endif
+  call s:SetCommandLine(s:command_hist[s:command_hist_idx])
+endfunc
+
+func s:EndHistoryScrolling(force)
+  if exists('s:command_hist_idx')
+    let parts = s:GetCommandLine(2)
+    if a:force || parts[1] != '' || join(parts, '') != s:command_hist[s:command_hist_idx]
+      call remove(s:command_hist, -1)
+      unlet s:command_hist_idx
+      autocmd! TermDebugHistory
+    endif
+  endif
+endfunc
+
+func s:EnterMap()
+  let nr = bufnr(s:prompt_bufname)
+  if s:IsOpenPreview('Completion')
+    let complete = s:GetPreviewLine('.')
+    call s:ClosePreview()
+    let cmd_parts = split(s:GetCommandLine(), " ", 1)
+    let cmd_parts[-1] = complete
+    call s:SetCommandLine(join(cmd_parts, " "))
+    return
+  elseif s:IsOpenPreview('History')
+    call s:SetCommandLine(s:GetPreviewLine('.'))
+    call s:ClosePreview()
+    return
+  endif
+
+  call s:EndHistoryScrolling(1)
+  if !TermDebugIsStopped()
+    return
+  endif
+
+  let cmd = s:GetCommandLine()
+  if empty(cmd) || empty(split(cmd, '\s'))
+    " Silently rerun last command
+    if !empty(s:command_hist)
+      let cmd = get(s:command_hist, -1, "")
+      call s:PromptOutput(cmd)
+    endif
+  else
+    " Add to history and input and actual <CR>
+    call add(s:command_hist, cmd)
+    call feedkeys("\n")
+  endif
+endfunc
+
+func s:OpenCompletion()
+  let cmd = s:GetCommandLine()
+  let Cb = function('s:HandleCompletion', [cmd])
+  call TermDebugSendMICommand('-complete ' . s:EscapeMIArgument(cmd), Cb)
+endfunc
+
+func s:GetCommandLine(...)
+  let nr = bufnr(s:prompt_bufname)
+  let line = getbufline(nr, '$')[0]
+  let off = len(prompt_getprompt(nr))
+  let parts = get(a:000, 0, 1)
+  if parts == 1
+    return line[off:]
+  else
+    let col = getcurpos()[2] - 1
+    return [line[off:col-1], line[col:]]
+  endif
+endfunc
+
+func s:SetCommandLine(cmd, ...)
+  let nr = bufnr(s:prompt_bufname)
+  let prefix = prompt_getprompt(nr)
+  let line = prefix . a:cmd
+  let col = len(prefix) + get(a:000, 0, len(a:cmd))
+  call setbufline(nr, '$', line)
+  let view = winsaveview()
+  if view['col'] != col
+    let view['col'] = col
+    call winrestview(view)
+  endif
+endfunc
+" }}}
+
+""""""""""""""""""""""""""""""""Custom commands"""""""""""""""""""""""""""""""{{{
 func s:PromptOutput(cmd)
   " Check if in "command>" mode
   if exists('s:prompt_commands')
@@ -581,138 +695,26 @@ endfunc
 func s:PromptShowError(msg)
   call s:PromptShowMessage([[a:msg, "ErrorMsg"]])
 endfunc
-
-func s:DeleteWord()
-  let [cmd_pre, cmd_post] = s:GetCommandLine(2)
-  let cmd_pre = substitute(cmd_pre, '\S*\s*$', '', '')
-  call s:SetCommandLine(cmd_pre . cmd_post, len(cmd_pre))
-endfunc
-
-func s:TabMap(expr)
-  if s:IsOpenPreview('Completion')
-    call s:ScrollPreview(a:expr)
-  elseif s:IsOpenPreview('History')
-    let inv_expr = (a:expr == "-1" ? "+1" : "-1")
-    call s:ScrollPreview(inv_expr)
-  elseif empty(s:GetCommandLine())
-    if !empty(s:command_hist)
-      call s:OpenScrollablePreview("History", s:command_hist)
-      call s:ScrollPreview("$")
-      call s:ClosePreviewOn('InsertLeave', 'CursorMovedI')
-    endif
-  else
-    call s:OpenCompletion()
-  endif
-endfunc
-
-func s:ArrowMap(expr)
-  if s:IsOpenPreview("Completion") || s:IsOpenPreview("History")
-    call s:ScrollPreview(a:expr)
-    return
-  endif
-  if empty(s:command_hist)
-    return
-  endif
-
-  " Quickly go to older history item
-  if a:expr == '-1'
-    if !exists('s:command_hist_idx')
-      let s:command_hist_idx = len(s:command_hist)
-      call add(s:command_hist, s:GetCommandLine())
-      augroup TermDebugHistory
-        autocmd! InsertLeave * call s:EndHistoryScrolling(1)
-        autocmd! CursorMovedI * call s:EndHistoryScrolling(0)
-      augroup END
-    endif
-    let s:command_hist_idx = max([s:command_hist_idx - 1, 0])
-  elseif a:expr == '+1'
-    if !exists('s:command_hist_idx')
-      return
-    endif
-    let s:command_hist_idx = min([s:command_hist_idx + 1, len(s:command_hist) - 1])
-  endif
-  call s:SetCommandLine(s:command_hist[s:command_hist_idx])
-endfunc
-
-func s:EndHistoryScrolling(force)
-  if exists('s:command_hist_idx')
-    let parts = s:GetCommandLine(2)
-    if a:force || parts[1] != '' || join(parts, '') != s:command_hist[s:command_hist_idx]
-      call remove(s:command_hist, -1)
-      unlet s:command_hist_idx
-      autocmd! TermDebugHistory
-    endif
-  endif
-endfunc
-
-func s:EnterMap()
-  let nr = bufnr(s:prompt_bufname)
-  if s:IsOpenPreview('Completion')
-    let complete = s:GetPreviewLine('.')
-    call s:ClosePreview()
-    let cmd_parts = split(s:GetCommandLine(), " ", 1)
-    let cmd_parts[-1] = complete
-    call s:SetCommandLine(join(cmd_parts, " "))
-    return
-  elseif s:IsOpenPreview('History')
-    call s:SetCommandLine(s:GetPreviewLine('.'))
-    call s:ClosePreview()
-    return
-  endif
-
-  call s:EndHistoryScrolling(1)
-  if !TermDebugIsStopped()
-    return
-  endif
-
-  let cmd = s:GetCommandLine()
-  if empty(cmd) || empty(split(cmd, '\s'))
-    " Silently rerun last command
-    if !empty(s:command_hist)
-      let cmd = get(s:command_hist, -1, "")
-      call s:PromptOutput(cmd)
-    endif
-  else
-    " Add to history and input and actual <CR>
-    call add(s:command_hist, cmd)
-    call feedkeys("\n")
-  endif
-endfunc
-
-func s:OpenCompletion()
-  let cmd = s:GetCommandLine()
-  let Cb = function('s:HandleCompletion', [cmd])
-  call TermDebugSendMICommand('-complete ' . s:EscapeMIArgument(cmd), Cb)
-endfunc
-
-func s:GetCommandLine(...)
-  let nr = bufnr(s:prompt_bufname)
-  let line = getbufline(nr, '$')[0]
-  let off = len(prompt_getprompt(nr))
-  let parts = get(a:000, 0, 1)
-  if parts == 1
-    return line[off:]
-  else
-    let col = getcurpos()[2] - 1
-    return [line[off:col-1], line[col:]]
-  endif
-endfunc
-
-func s:SetCommandLine(cmd, ...)
-  let nr = bufnr(s:prompt_bufname)
-  let prefix = prompt_getprompt(nr)
-  let line = prefix . a:cmd
-  let col = len(prefix) + get(a:000, 0, len(a:cmd))
-  call setbufline(nr, '$', line)
-  let view = winsaveview()
-  if view['col'] != col
-    let view['col'] = col
-    call winrestview(view)
-  endif
-endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
+func s:CommOutput(msg)
+  " Stream record
+  if !empty(a:msg) && stridx("~@&", a:msg[0]) == 0
+    return s:HandleStream(a:msg)
+  endif
+  " Async record
+  let async = s:GetAsyncClass(a:msg)
+  if !empty(async)
+    return s:HandleAsync(a:msg)
+  endif
+  " Result record
+  let result = s:GetResultClass(a:msg)
+  if !empty(result)
+    return s:HandleResult(a:msg)
+  endif
+endfunc
+
 func s:HandleAsync(msg)
   let async = s:GetAsyncClass(a:msg)
   let dict = EvalCommaResults(a:msg)
