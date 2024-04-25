@@ -459,8 +459,12 @@ func s:PromptOutput(cmd)
     call s:PromptShowError("No python support yet!")
     return
   endif
-  if stridx("!", cmd[0]) == 0 || stridx("shell", cmd[0]) == 0 && len(cmd[0]) >= 3
+  if stridx("!", cmd[0]) == 0 || (stridx("shell", cmd[0]) == 0 && len(cmd[0]) >= 3)
     call s:PromptShowError("No shell support yet!")
+    return
+  endif
+  if stridx("edit", cmd[0]) == 0 && len(cmd[0]) >= 2
+    call s:PromptShowError("No edit support (ever)!")
     return
   endif
 
