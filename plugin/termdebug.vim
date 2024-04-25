@@ -459,6 +459,33 @@ func s:PromptOutput(cmd)
     call s:PromptShowError("No python support yet!")
     return
   endif
+  if stridx("!", cmd[0]) == 0 || stridx("shell", cmd[0]) == 0 && len(cmd[0]) >= 3
+    call s:PromptShowError("No shell support yet!")
+    return
+  endif
+
+  if cmd[0] == "host"
+    if exists('s:host')
+      call s:PromptShowNormal("Remote debugging " .. s:host)
+    else
+      call s:PromptShowNormal("Local debugging")
+    endif
+    return
+  endif
+
+  if cmd[0] == "whoami"
+    if s:pid <= 0
+      call s:PromptShowError("No inferior running.")
+    else
+      let cmd = ['stat', '--printf=%G', '/proc/' . s:pid]
+      if exists('s:host')
+        let cmd = ["ssh", s:host, join(cmd, ' ')]
+      endif
+      let user = system(cmd)
+      call s:PromptShowNormal("User of inferior process: " .. user)
+    endif
+    return
+  endif
 
   if exists('g:termdebug_override_finish_and_return') && g:termdebug_override_finish_and_return
     if stridx("finish", cmd[0]) == 0 && len(cmd[0]) >= 3
