@@ -119,8 +119,17 @@ endfunction
 
 " Accepts either a console command or a C++ expression
 func s:EscapeMIArgument(arg)
-  " TODO buggy
-  return "\"" .. a:arg .. "\""
+  let escaped = '"'
+  for char in a:arg
+    if char == '\'
+      let escaped ..= '\\'
+    elseif char == '"'
+      let escaped ..= '\"'
+    else
+      let escaped ..= char
+    endif
+  endfor
+  return escaped .. '"'
 endfunc
 
 func TermDebugSendCommand(cmd)
