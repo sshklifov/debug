@@ -48,7 +48,7 @@ func TermDebugGoToBreakpoint(...)
 endfunc
 
 func TermDebugGoToCapture()
-  let ids = win_findbuf(bufnr(s:capture_bufname))
+  let ids = win_findbuf(s:capture_bufnr)
   if empty(ids)
     exe "tabnew " . s:capture_bufname
   else
@@ -64,13 +64,12 @@ func TermDebugGoToSource()
 endfunc
 
 func TermDebugGoToGdb()
-  let nr = bufnr(s:prompt_bufname)
-  let wids = win_findbuf(nr)
+  let wids = win_findbuf(s:prompt_bufnr)
   if !empty(wids)
     call win_gotoid(wids[0])
   else
     above new
-    exe "b " . nr
+    exe "b " . s:prompt_bufnr
   endif
 endfunc
 "}}}
@@ -348,16 +347,18 @@ func s:CreateSpecialBuffers()
     call setbufvar(nr, "&modifiable", 1)
     call bufload(nr)
   endfor
+
+  " Do this once now for convenience
+  let s:capture_bufnr = bufnr(s:capture_bufname)
+  let s:asm_bufnr = bufnr(s:asm_bufname)
+  let s:prompt_bufnr = bufnr(s:prompt_bufname)
   
   " Options for asm window
-  let nr = bufnr(s:asm_bufname)
-  call setbufvar(nr, '&ft', 'asm')
-  " Options for prompt
-  let nr = bufnr(s:prompt_bufname)
-  call setbufvar(nr, '&buftype', 'prompt')
-  " Display tabs properly
-  for name in [s:asm_bufname, s:prompt_bufname]
-    let nr = bufnr(name)
+  call setbufvar(s:asm_bufnr, '&ft', 'asm')
+  " Options for prompt window
+  call setbufvar(s:prompt_bufnr, '&buftype', 'prompt')
+  " Display tabs properly in asm/source windows
+  for nr in [s:asm_bufnr, s:prompt_bufnr]
     call setbufvar(nr, '&expandtab', v:false)
     call setbufvar(nr, '&smarttab', v:false)
     call setbufvar(nr, '&softtabstop', 0)
@@ -371,14 +372,13 @@ func s:CommReset(timer_id)
 endfunc
 
 func s:CommJoin(job_id, msgs, event)
-  let capture = bufnr(s:capture_bufname)
   for msg in a:msgs
     " Append to capture buf
-    let empty = nvim_buf_line_count(capture) == 1 && empty(nvim_buf_get_lines(capture, 0, 1, v:true)[0])
+    let empty = nvim_buf_line_count(s:capture_bufnr) == 1 && empty(nvim_buf_get_lines(s:capture_bufnr, 0, 1, v:true)[0])
     if empty
-      call setbufline(capture, 1, strtrans(msg))
+      call setbufline(s:capture_bufnr, 1, strtrans(msg))
     else
-      call appendbufline(capture, "$", strtrans(msg))
+      call appendbufline(s:capture_bufnr, "$", strtrans(msg))
     endif
     " Process message
     let msg = s:comm_buf .. msg
@@ -464,7 +464,6 @@ func s:EndHistoryScrolling(force)
 endfunc
 
 func s:EnterMap()
-  let nr = bufnr(s:prompt_bufname)
   if s:IsOpenPreview('Completion')
     let complete = s:GetPreviewLine('.')
     call s:ClosePreview()
@@ -504,9 +503,8 @@ func s:OpenCompletion()
 endfunc
 
 func s:GetCommandLine(...)
-  let nr = bufnr(s:prompt_bufname)
-  let line = getbufline(nr, '$')[0]
-  let off = len(prompt_getprompt(nr))
+  let line = getbufline(s:prompt_bufnr, '$')[0]
+  let off = len(prompt_getprompt(s:prompt_bufnr))
   let parts = get(a:000, 0, 1)
   if parts == 1
     return line[off:]
@@ -517,11 +515,10 @@ func s:GetCommandLine(...)
 endfunc
 
 func s:SetCommandLine(cmd, ...)
-  let nr = bufnr(s:prompt_bufname)
-  let prefix = prompt_getprompt(nr)
+  let prefix = prompt_getprompt(s:prompt_bufnr)
   let line = prefix . a:cmd
   let col = len(prefix) + get(a:000, 0, len(a:cmd))
-  call setbufline(nr, '$', line)
+  call setbufline(s:prompt_bufnr, '$', line)
   let view = winsaveview()
   if view['col'] != col
     let view['col'] = col
@@ -532,115 +529,56 @@ endfunc
 
 """"""""""""""""""""""""""""""""Custom commands"""""""""""""""""""""""""""""""{{{
 func s:PromptOutput(cmd)
-  " Check if in "command>" mode
-  if exists('s:prompt_commands')
-    if a:cmd == 'end'
-      let msg = printf('-break-commands %s', join(s:prompt_commands, " "))
-      call s:SendMICommandNoOutput(msg)
-      call prompt_setprompt(bufnr(), '(gdb) ')
-      unlet s:prompt_commands
-    else
-      call add(s:prompt_commands, s:EscapeMIArgument(a:cmd))
-    endif
-    return
+  " Check if in command> mode
+  if prompt_getprompt(s:prompt_bufnr) =~ 'command>'
+    return s:CommandsOutput(a:cmd)
   endif
 
   let cmd = split(a:cmd, " ")
-  " Special commands
 
+  " Remapped commands (required in order to work)
   if stridx("commands", cmd[0]) == 0 && len(cmd[0]) >= 3
-    let brs = cmd[1:]
-    if empty(brs)
-      if empty(s:breakpoints)
-        call s:PromptShowNormal("No breakpoints")
-        return
-      else
-        call add(brs, max(map(keys(s:breakpoints), "str2nr(v:val)")))
-      endif
-    endif
-    for brk in brs
-      if !has_key(s:breakpoints, brk)
-        call s:PromptShowNormal("No breakpoint number " . brk)
-        return
-      endif
-    endfor
-    let s:prompt_commands = brs
-    call prompt_setprompt(bufnr(), 'command> ')
-    return
+    return s:CommandsCommand(cmd)
   endif
 
+  " Unsupported commands (need remapping)
   if stridx("python", cmd[0]) == 0 && len(cmd[0]) >= 2
-    call s:PromptShowError("No python support yet!")
-    return
-  endif
-  if stridx("!", cmd[0]) == 0 || (stridx("shell", cmd[0]) == 0 && len(cmd[0]) >= 3)
-    call s:PromptShowError("No shell support yet!")
-    return
-  endif
-  if stridx("edit", cmd[0]) == 0 && len(cmd[0]) >= 2
-    call s:PromptShowError("No edit support (ever)!")
-    return
+    return s:PromptShowError("No python support yet!")
+  elseif stridx("!", cmd[0]) == 0 || (stridx("shell", cmd[0]) == 0 && len(cmd[0]) >= 3)
+    return s:PromptShowError("No shell support yet!")
+  elseif stridx("edit", cmd[0]) == 0 && len(cmd[0]) >= 2
+    return s:PromptShowError("No edit support (ever)!")
   endif
 
-  if cmd[0] == "host"
-    if exists('s:host')
-      call s:PromptShowNormal("Remote debugging " .. s:host)
-    else
-      call s:PromptShowNormal("Local debugging")
-    endif
-    return
+  " Custom commands
+  if cmd[0] == "hostname" && len(cmd[0]) >= 4
+    return s:HostnameCommand()
+  elseif cmd[0] == "whoami" && len(cmd[0]) >= 3
+    return s:WhoamiCommand()
   endif
 
-  if cmd[0] == "whoami"
-    if s:pid <= 0
-      call s:PromptShowError("No inferior running.")
-    else
-      let cmd = ['stat', '--printf=%G', '/proc/' . s:pid]
-      if exists('s:host')
-        let cmd = ["ssh", s:host, join(cmd, ' ')]
-      endif
-      let user = system(cmd)
-      call s:PromptShowNormal("User of inferior process: " .. user)
-    endif
-    return
-  endif
-
+  " Overriding GDB commands
   if exists('g:termdebug_override_finish_and_return') && g:termdebug_override_finish_and_return
     if stridx("finish", cmd[0]) == 0 && len(cmd[0]) >= 3
-      let was_option = s:scheduler_locking
-      call s:SendMICommandNoOutput('-gdb-set scheduler-locking on')
-      call s:SendMICommandNoOutput('-exec-finish')
-      call s:SendMICommandNoOutput('-gdb-set scheduler-locking ' . was_option)
-      return
+      return s:FinishCommand()
+    elseif stridx("return", cmd[0]) == 0 && len(cmd[0]) >= 3
+      return s:ReturnCommand()
     endif
-
-    if stridx("return", cmd[0]) == 0 && len(cmd[0]) >= 3
-      let was_option = s:scheduler_locking
-      call s:SendMICommandNoOutput('-gdb-set scheduler-locking on')
-      call s:SendMICommandNoOutput('-interpreter-exec console finish')
-      call s:SendMICommandNoOutput('-gdb-set scheduler-locking ' . was_option)
-      return
-    endif
-  endif
-
-  if exists("g:termdebug_override_up_and_down") && g:termdebug_override_up_and_down
+  elseif exists("g:termdebug_override_up_and_down") && g:termdebug_override_up_and_down
     if cmd[0] == "up"
-      return TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:true]))
+      return s:UpCommand()
+    elseif cmd[0] == "down"
+      return s:DownCommand()
     endif
-    if cmd[0] == "down"
-      return TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:false]))
-    endif
-  endif
-
-  if exists("g:termdebug_override_s_and_n") && g:termdebug_override_s_and_n
+  elseif exists("g:termdebug_override_s_and_n") && g:termdebug_override_s_and_n
     if cmd[0] == "asm"
-      return TermDebugSetAsmMode(s:asm_mode ? 0 : 1)
-    endif
-    " Toggle asm mode based on instruction stepping
-    if cmd[0] == "si" || cmd[0] == "stepi" || cmd[0] == "ni" || cmd[0] == "nexti"
+      return s:AsmCommand()
+    elseif cmd[0] == "si" || cmd[0] == "stepi" || cmd[0] == "ni" || cmd[0] == "nexti"
       call TermDebugSetAsmMode(1)
+      " NOTE: follow-through
     elseif cmd[0] == "s" || cmd[0] == "step" || cmd[0] == "n" || cmd[0] == "next"
       call TermDebugSetAsmMode(0)
+      " NOTE: follow-through
     endif
   endif
 
@@ -649,11 +587,90 @@ func s:PromptOutput(cmd)
   call s:SendMICommandNoOutput(msg)
 endfunc
 
+func s:CommandsCommand(cmd)
+  let brs = a:cmd[1:]
+  if empty(brs)
+    if empty(s:breakpoints)
+      return s:PromptShowError("No breakpoints")
+    else
+      let last_br = max(map(keys(s:breakpoints), "str2nr(v:val)"))
+      call add(brs, last_br)
+    endif
+  endif
+
+  for brk in brs
+    if !has_key(s:breakpoints, brk)
+      call s:PromptShowError("No breakpoint number " . brk)
+      return
+    endif
+  endfor
+  let s:prompt_commands = brs
+  call prompt_setprompt(s:prompt_bufnr, 'command> ')
+endfunc
+
+func s:CommandsOutput(cmd)
+  if a:cmd == 'end'
+    let msg = printf('-break-commands %s', join(s:prompt_commands, " "))
+    call s:SendMICommandNoOutput(msg)
+    call prompt_setprompt(bufnr(), '(gdb) ')
+    unlet s:prompt_commands
+  else
+    call add(s:prompt_commands, s:EscapeMIArgument(a:cmd))
+  endif
+  return
+endfunc
+
+func s:HostnameCommand()
+  if exists('s:host')
+    call s:PromptShowNormal("Remote debugging " .. s:host)
+  else
+    call s:PromptShowNormal("Local debugging")
+  endif
+endfunc
+
+func s:WhoamiCommand()
+  if s:pid <= 0
+    call s:PromptShowError("No inferior running.")
+  else
+    let cmd = ['stat', '--printf=%G', '/proc/' . s:pid]
+    if exists('s:host')
+      let cmd = ["ssh", s:host, join(cmd, ' ')]
+    endif
+    let user = system(cmd)
+    call s:PromptShowNormal("User of inferior process: " .. user)
+  endif
+endfunc
+
+func s:FinishCommand()
+  let was_option = s:scheduler_locking
+  call s:SendMICommandNoOutput('-gdb-set scheduler-locking on')
+  call s:SendMICommandNoOutput('-exec-finish')
+  call s:SendMICommandNoOutput('-gdb-set scheduler-locking ' . was_option)
+endfunc
+
+func s:ReturnCommand()
+  let was_option = s:scheduler_locking
+  call s:SendMICommandNoOutput('-gdb-set scheduler-locking on')
+  call s:SendMICommandNoOutput('-interpreter-exec console finish')
+  call s:SendMICommandNoOutput('-gdb-set scheduler-locking ' . was_option)
+endfunc
+
+func s:UpCommand()
+  call TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:true]))
+endfunc
+
+func s:DownCommand()
+  call TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:false]))
+endfunc
+
+func s:AsmCommand()
+  call TermDebugSetAsmMode(s:asm_mode ? 0 : 1)
+endfunc
+
 func s:PromptInterrupt()
   if TermDebugIsStopped()
     " Clear command line
-    let nr = bufnr(s:prompt_bufname)
-    let input = getbufline(nr, '$')[0]
+    let input = getbufline(s:prompt_bufnr, '$')[0]
     call s:PromptShowMessage([[input, "Normal"], ["^C", "Cursor"]])
   else
     " Send interrupt
@@ -670,17 +687,16 @@ func s:PromptInterrupt()
 endfunc
 
 func s:PromptShowMessage(msg)
-  let nr = bufnr(s:prompt_bufname)
-  let lnum = nvim_buf_line_count(nr) - 1
+  let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
   let line = join(map(copy(a:msg), "v:val[0]"), '')
-  call appendbufline(nr, lnum, line)
+  call appendbufline(s:prompt_bufnr, lnum, line)
 
   let ns = nvim_create_namespace('TermDebugHighlight')
   let end_col = 0
   for [msg, hl_group] in a:msg
     let start_col = end_col
     let end_col = start_col + len(msg)
-    call nvim_buf_set_extmark(nr, ns, lnum, start_col, #{end_col: end_col, hl_group: hl_group})
+    call nvim_buf_set_extmark(s:prompt_bufnr, ns, lnum, start_col, #{end_col: end_col, hl_group: hl_group})
   endfor
 endfunc
 
@@ -789,11 +805,10 @@ func s:HandleCursor(class, dict)
   endif
   " Update prompt
   let ns = nvim_create_namespace('TermDebugPrompt')
-  let nr = bufnr(s:prompt_bufname)
-  call nvim_buf_clear_namespace(nr, ns, 0, -1)
+  call nvim_buf_clear_namespace(s:prompt_bufnr, ns, 0, -1)
   if !s:stopped
-    let lines = nvim_buf_line_count(nr)
-    call nvim_buf_set_extmark(nr, ns, lines - 1, 0, #{line_hl_group: 'Comment'})
+    let lines = nvim_buf_line_count(s:prompt_bufnr)
+    call nvim_buf_set_extmark(s:prompt_bufnr, ns, lines - 1, 0, #{line_hl_group: 'Comment'})
   endif
   " Update cursor
   call s:ClearCursorSign()
@@ -1250,22 +1265,21 @@ endfunc
 func s:HandleDisassemble(addr, dict)
   let asm_insns = a:dict['asm_insns']
 
-  let nr = bufnr(s:asm_bufname)
-  call deletebufline(nr, 1, '$')
+  call deletebufline(s:asm_bufnr, 1, '$')
   if empty(asm_insns)
-    call appendbufline(nr, 0, "No disassembler output")
+    call appendbufline(s:asm_bufnr, 0, "No disassembler output")
     return
   endif
 
   let intro = printf("Disassembly of %s:", asm_insns[0]['func-name'])
-  call appendbufline(nr, 0, intro)
+  call appendbufline(s:asm_bufnr, 0, intro)
 
   for asm_ins in asm_insns
     let address = asm_ins['address']
     let offset = asm_ins['offset']
     let inst = asm_ins['inst']
     let line = printf("%s<%d>: %s", address, offset, inst)
-    call appendbufline(nr, "$", line)
+    call appendbufline(s:asm_bufnr, "$", line)
   endfor
   call s:SelectAsmAddr(a:addr)
 endfunc
@@ -1522,7 +1536,6 @@ func s:ClosePreview()
     call nvim_buf_delete(nr, #{force: 1})
     unlet s:preview_win
   endif
-  let nr = bufnr(s:prompt_bufname)
   if exists('#TermDebugCompletion')
     au! TermDebugCompletion
   endif
