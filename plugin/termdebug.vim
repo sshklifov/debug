@@ -255,6 +255,7 @@ func TermDebugStart(...)
   const s:prompt_bufname = "Gdb terminal"
   " Exceptions thrown
   const s:eval_exception = "EvalFailedException"
+  const s:float_edit_exception = "FloatEditException"
   " Set defaults for required variables
   let s:breakpoints = #{}
   let s:callbacks = #{}
@@ -501,7 +502,7 @@ func s:ArrowMap(expr)
     return ''
   endif
 
-  " Quickly go to older history item
+  " Quickly scroll history (no preview)
   if a:expr == '-1'
     if !exists('s:command_hist_idx')
       let s:command_hist_idx = len(s:command_hist)
@@ -527,8 +528,10 @@ func s:EndHistoryScrolling(force)
     if a:force || parts[1] != '' || join(parts, '') != s:command_hist[s:command_hist_idx]
       call remove(s:command_hist, -1)
       unlet s:command_hist_idx
-      autocmd! TermDebugHistory
     endif
+  endif
+  if exists('#TermDebugHistory')
+    au! TermDebugHistory
   endif
 endfunc
 
@@ -550,6 +553,7 @@ func s:EnterMap()
   endif
 
   call s:EndHistoryScrolling(1)
+  call s:EndCompletion()
   if !TermDebugIsStopped()
     return ''
   endif
@@ -1214,21 +1218,23 @@ func s:HandleBreakpointEdit(bp, dict)
   let script = s:Get([], a:dict, 'BreakpointTable', 'body', 'bkpt', 'script')
   if !empty(script) && bufname() == s:prompt_bufname
     call s:OpenFloatEdit(script)
-    augroup TermDebug
-      exe printf("autocmd! WinClosed * ++once call s:OnBrEditComplete(%d)", a:bp)
+    augroup TermDebugCommands
+      exe printf("autocmd! WinClosed * call s:OnEditComplete(%d)", a:bp)
     augroup END
   endif
 endfunc
 
-func s:OnBrEditComplete(bp)
-  let winid = expand("<amatch>")
-  let nr = winbufnr(winid)
+func s:OnEditComplete(bp)
+  let nr = winbufnr(s:edit_win)
   let commands = getbufline(nr, 1, '$')
-  call s:CloseFloatEdit(winid)
-
+  call s:CloseFloatEdit()
   let commands = map(commands, {k, v -> '"' . v . '"'})
   let msg = printf("-break-commands %d %s", a:bp, join(commands, " "))
   call TermDebugSendMICommand(msg, {_ -> s:PromptShowNormal("Breakpoint commands updated")})
+
+  if exists('#TermDebugCommands')
+    au! TermDebugCommands
+  endif
 endfunc
 
 func s:HandleSymbolInfo(dict)
@@ -1289,12 +1295,22 @@ func s:HandleCompletion(cmd, dict)
 
   call s:OpenScrollablePreview("Completion", matches)
   call s:ScrollPreview("1")
-  call s:ClosePreviewOn('InsertLeave')
   augroup TermDebugCompletion
     autocmd! TextChangedI <buffer> call s:OpenCompletion()
+    autocmd! InsertLeave <buffer> call s:EndCompletion()
   augroup END
   " Track this for optimization purposes
   let s:previous_cmd = a:cmd
+endfunc
+
+func s:EndCompletion()
+  call s:ClosePreview()
+  if exists('s:previous_cmd')
+    unlet s:previous_cmd
+  endif
+  if exists('#TermDebugCompletion')
+    au! TermDebugCompletion
+  endif
 endfunc
 
 func s:HandleInterrupt(cmd, dict)
@@ -1440,6 +1456,10 @@ func s:WinAbsoluteLine()
 endfunc
 
 func s:OpenFloatEdit(lines)
+  if exists('s:edit_win')
+    throw s:float_edit_exception
+  endif
+
   const width = 20
   const height = 5
   let row = (nvim_win_get_height(0) - height) / 2
@@ -1459,14 +1479,17 @@ func s:OpenFloatEdit(lines)
   let nr = nvim_create_buf(0, 0)
   call nvim_buf_set_option(nr, "buftype", "nofile")
   call setbufline(nr, 1, a:lines)
-  let winid = nvim_open_win(nr, v:true, opts)
-  call nvim_win_set_option(winid, 'wrap', v:false)
-  return winid
+  let s:edit_win = nvim_open_win(nr, v:true, opts)
+  call nvim_win_set_option(s:edit_win, 'wrap', v:false)
+  return s:edit_win
 endfunc
 
-func s:CloseFloatEdit(winid)
-  let nr = winbufnr(a:winid)
-  call nvim_buf_delete(nr, #{force: 1})
+func s:CloseFloatEdit()
+  if exists('s:edit_win')
+    let nr = winbufnr(s:edit_win)
+    call nvim_buf_delete(nr, #{force: 1})
+    unlet s:edit_win
+  endif
 endfunc
 
 func s:OpenPreview(title, lines)
@@ -1566,9 +1589,9 @@ func s:GetPreviewLine(expr)
 endfunc
 
 func s:ClosePreviewOn(...)
-  augroup TermDebugCompletion
+  augroup TermDebugPreview
     for event in a:000
-      exe printf("autocmd! %s * ++once call s:ClosePreview()", event)
+      exe printf("autocmd! %s * call s:ClosePreview()", event)
     endfor
   augroup END
 endfunc
@@ -1580,8 +1603,8 @@ func s:ClosePreview()
     call nvim_buf_delete(nr, #{force: 1})
     unlet s:preview_win
   endif
-  if exists('#TermDebugCompletion')
-    au! TermDebugCompletion
+  if exists('#TermDebugPreview')
+    au! TermDebugPreview
   endif
 endfunc
 "}}}
@@ -1593,9 +1616,13 @@ func s:EndTermDebug(job_id, exit_code, event)
   endif
 
   silent! autocmd! TermDebug
+  silent! autocmd! TermDebugPreview
+  silent! autocmd! TermDebugHistory
+  silent! autocmd! TermDebugCommands
   silent! autocmd! TermDebugCompletion
 
   call s:ClosePreview()
+  call s:CloseFloatEdit()
 
   " Clear signs
   call s:ClearCursorSign()
