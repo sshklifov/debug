@@ -341,8 +341,8 @@ func s:LaunchGdb()
   inoremap <buffer> <expr> <C-w> <SID>CtrlW_Map()
   inoremap <buffer> <expr> <Up> <SID>ArrowMap("-1")
   inoremap <buffer> <expr> <Down> <SID>ArrowMap("+1")
-  inoremap <buffer> <expr> <Tab> <SID>TabMap("+1")
-  inoremap <buffer> <expr> <S-Tab> <SID>TabMap("-1")
+  inoremap <buffer> <Tab> <cmd>call <SID>TabMap("+1")<CR>
+  inoremap <buffer> <S-Tab> <cmd>call <SID>TabMap("-1")<CR>
   inoremap <buffer> <expr> <CR> <SID>EnterMap()
 
   startinsert
@@ -452,20 +452,18 @@ func s:TabMap(expr)
   if s:IsOpenPreview('Completion')
     call s:ScrollPreview(a:expr)
   elseif s:IsOpenPreview('History')
-    let inv_expr = (a:expr == "-1" ? "+1" : "-1")
-    call s:ScrollPreview(inv_expr)
+    call s:ScrollPreview(a:expr)
   elseif empty(s:GetCommandLine())
     call s:OpenHistory()
   else
     call s:OpenCompletion()
   endif
-  return ''
 endfunc
 
 func s:OpenHistory()
   if !empty(s:command_hist)
-    call s:OpenScrollablePreview("History", s:command_hist)
-    call s:ScrollPreview("$")
+    call s:OpenScrollablePreview("History", reverse(copy(s:command_hist)))
+    call s:ScrollPreview("1")
     call s:ClosePreviewOn('InsertLeave', 'CursorMovedI')
   endif
 endfunc
