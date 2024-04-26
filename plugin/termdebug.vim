@@ -272,7 +272,9 @@ func TermDebugStart(...)
   if a:0 > 1
     let s:user = a:2
   endif
+  " GDB settings
   let s:scheduler_locking = "replay"
+  let s:max_completions = 20
 
   call s:CreateSpecialBuffers()
 
@@ -296,7 +298,7 @@ func s:LaunchGdb()
   " Remove the (gdb) prompt
   call extend(gdb_cmd, ['-iex', 'set prompt'])
   " Limit completions for faster TAB autocomplete
-  call extend(gdb_cmd, ['-iex', 'set max-completions 20'])
+  call extend(gdb_cmd, ['-iex', 'set max-completions ' . s:max_completions])
   " Do not open a shell to run inferior
   call extend(gdb_cmd, ['-iex', 'set startup-with-shell off'])
   " Launch GDB through ssh
@@ -328,19 +330,19 @@ func s:LaunchGdb()
   call setbufvar(bufnr(), '&list', v:false)
   call prompt_setprompt(bufnr(), '(gdb) ')
   call prompt_setcallback(bufnr(), function('s:PromptOutput'))
-  call prompt_setinterrupt(bufnr(), function('s:PromptInterrupt'))
 
   augroup TermDebug
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
   augroup END
 
-  inoremap <buffer> <C-d> <cmd>call TermDebugQuit()<CR>
-  inoremap <buffer> <C-w> <cmd>call <SID>DeleteWord()<CR>
-  inoremap <buffer> <Up> <cmd>call <SID>ArrowMap("-1")<CR>
-  inoremap <buffer> <Down> <cmd>call <SID>ArrowMap("+1")<CR>
-  inoremap <buffer> <Tab> <cmd>call <SID>TabMap("+1")<CR>
-  inoremap <buffer> <S-Tab> <cmd>call <SID>TabMap("-1")<CR>
-  inoremap <buffer> <CR> <cmd>call <SID>EnterMap()<CR>
+  inoremap <buffer> <expr> <C-d> <SID>CtrlD_Map()
+  inoremap <buffer> <expr> <C-c> <SID>CtrlC_Map()
+  inoremap <buffer> <expr> <C-w> <SID>CtrlW_Map()
+  inoremap <buffer> <expr> <Up> <SID>ArrowMap("-1")
+  inoremap <buffer> <expr> <Down> <SID>ArrowMap("+1")
+  inoremap <buffer> <expr> <Tab> <SID>TabMap("+1")
+  inoremap <buffer> <expr> <S-Tab> <SID>TabMap("-1")
+  inoremap <buffer> <expr> <CR> <SID>EnterMap()
 
   startinsert
 endfunc
@@ -387,8 +389,7 @@ endfunc
 func s:CommJoin(job_id, msgs, event)
   for msg in a:msgs
     " Append to capture buf
-    let empty = nvim_buf_line_count(s:capture_bufnr) == 1 && empty(nvim_buf_get_lines(s:capture_bufnr, 0, 1, v:true)[0])
-    if empty
+    if s:EmptyBuffer(s:capture_bufnr)
       call setbufline(s:capture_bufnr, 1, strtrans(msg))
     else
       call appendbufline(s:capture_bufnr, "$", strtrans(msg))
@@ -413,10 +414,37 @@ func s:CommJoin(job_id, msgs, event)
   endfor
 endfunc
 
-func s:DeleteWord()
+func s:EmptyBuffer(nr)
+  return nvim_buf_line_count(a:nr) == 1 && empty(nvim_buf_get_lines(a:nr, 0, 1, v:true)[0])
+endfunc
+
+func s:CtrlD_Map()
+  call TermDebugQuit()
+  return ''
+endfunc
+
+func s:CtrlC_Map()
+  if TermDebugIsStopped()
+    let input = getbufline(s:prompt_bufnr, '$')[0]
+    call s:PromptShowMessage([[input, "Normal"], ["^C", "Cursor"]])
+    return s:SetCommandLine("")
+  else
+    " Send interrupt
+    let interrupt = 2
+    if !exists('s:host')
+      let pid = jobpid(s:gdb_job_id)
+      call v:lua.vim.loop.kill(pid, interrupt)
+    else
+      let kill = printf("kill -%d %d", interrupt, s:pid)
+      call system(["ssh", s:host, kill])
+    endif
+  endif
+endfunc
+
+func s:CtrlW_Map()
   let [cmd_pre, cmd_post] = s:GetCommandLine(2)
-  let cmd_pre = substitute(cmd_pre, '\S*\s*$', '', '')
-  call s:SetCommandLine(cmd_pre . cmd_post, len(cmd_pre))
+  let n = len(matchstr(cmd_pre, '\S*\s*$'))
+  return repeat("\<BS>", n)
 endfunc
 
 func s:TabMap(expr)
@@ -426,23 +454,51 @@ func s:TabMap(expr)
     let inv_expr = (a:expr == "-1" ? "+1" : "-1")
     call s:ScrollPreview(inv_expr)
   elseif empty(s:GetCommandLine())
-    if !empty(s:command_hist)
-      call s:OpenScrollablePreview("History", s:command_hist)
-      call s:ScrollPreview("$")
-      call s:ClosePreviewOn('InsertLeave', 'CursorMovedI')
-    endif
+    call s:OpenHistory()
   else
     call s:OpenCompletion()
   endif
+  return ''
+endfunc
+
+func s:OpenHistory()
+  if !empty(s:command_hist)
+    call s:OpenScrollablePreview("History", s:command_hist)
+    call s:ScrollPreview("$")
+    call s:ClosePreviewOn('InsertLeave', 'CursorMovedI')
+  endif
+endfunc
+
+func s:OpenCompletion()
+  let cmd = s:GetCommandLine()
+  let context = split(cmd, " ", 1)[-1]
+  if exists('s:preview_win')
+    let nr = nvim_win_get_buf(s:preview_win)
+    if nvim_buf_line_count(nr) < s:max_completions
+      if stridx(cmd, s:previous_cmd) == 0 && cmd[-1:-1] !~ '\s'
+        let matches = filter(getbufline(nr, 1, '$'), 'stridx(v:val, context) == 0 && v:val != context')
+        " Just refresh the preview
+        call s:OpenScrollablePreview("Completion", matches)
+        call s:ScrollPreview("1")
+        let s:previous_cmd = cmd
+      endif
+    elseif stridx(s:previous_cmd, cmd) == 0
+      let s:previous_cmd = cmd
+      return
+    endif
+  endif
+  " Need to refetch completions from GDB
+  let Cb = function('s:HandleCompletion', [cmd])
+  call TermDebugSendMICommand('-complete ' . s:EscapeMIArgument(cmd), Cb)
 endfunc
 
 func s:ArrowMap(expr)
   if s:IsOpenPreview("Completion") || s:IsOpenPreview("History")
     call s:ScrollPreview(a:expr)
-    return
+    return ''
   endif
   if empty(s:command_hist)
-    return
+    return ''
   endif
 
   " Quickly go to older history item
@@ -458,11 +514,11 @@ func s:ArrowMap(expr)
     let s:command_hist_idx = max([s:command_hist_idx - 1, 0])
   elseif a:expr == '+1'
     if !exists('s:command_hist_idx')
-      return
+      return ''
     endif
     let s:command_hist_idx = min([s:command_hist_idx + 1, len(s:command_hist) - 1])
   endif
-  call s:SetCommandLine(s:command_hist[s:command_hist_idx])
+  return s:SetCommandLine(s:command_hist[s:command_hist_idx])
 endfunc
 
 func s:EndHistoryScrolling(force)
@@ -478,41 +534,39 @@ endfunc
 
 func s:EnterMap()
   if s:IsOpenPreview('Completion')
-    let complete = s:GetPreviewLine('.')
-    call s:ClosePreview()
-    let cmd_parts = split(s:GetCommandLine(), " ", 1)
-    let cmd_parts[-1] = complete
-    call s:SetCommandLine(join(cmd_parts, " "))
-    return
+    let cmp = s:GetPreviewLine('.')
+    if !empty(cmp)
+      let cmd_parts = split(s:GetCommandLine(), " ", 1)
+      let cmd_parts[-1] = cmp
+      return s:SetCommandLine(join(cmd_parts, " "))
+    else
+      call s:ClosePreview()
+      " NOTE: follow-through
+    endif
   elseif s:IsOpenPreview('History')
-    call s:SetCommandLine(s:GetPreviewLine('.'))
+    let cmdline = s:SetCommandLine(s:GetPreviewLine('.'))
     call s:ClosePreview()
-    return
+    return cmdline
   endif
 
   call s:EndHistoryScrolling(1)
   if !TermDebugIsStopped()
-    return
+    return ''
   endif
 
   let cmd = s:GetCommandLine()
-  if empty(cmd) || empty(split(cmd, '\s'))
+  if cmd =~ '\S'
+    " Add to history and run command
+    call add(s:command_hist, cmd)
+    return "\n"
+  else
     " Silently rerun last command
     if !empty(s:command_hist)
       let cmd = get(s:command_hist, -1, "")
       call s:PromptOutput(cmd)
     endif
-  else
-    " Add to history and input and actual <CR>
-    call add(s:command_hist, cmd)
-    call feedkeys("\n")
+    return ''
   endif
-endfunc
-
-func s:OpenCompletion()
-  let cmd = s:GetCommandLine()
-  let Cb = function('s:HandleCompletion', [cmd])
-  call TermDebugSendMICommand('-complete ' . s:EscapeMIArgument(cmd), Cb)
 endfunc
 
 func s:GetCommandLine(...)
@@ -527,16 +581,8 @@ func s:GetCommandLine(...)
   endif
 endfunc
 
-func s:SetCommandLine(cmd, ...)
-  let prefix = prompt_getprompt(s:prompt_bufnr)
-  let line = prefix . a:cmd
-  let col = len(prefix) + get(a:000, 0, len(a:cmd))
-  call setbufline(s:prompt_bufnr, '$', line)
-  let view = winsaveview()
-  if view['col'] != col
-    let view['col'] = col
-    call winrestview(view)
-  endif
+func s:SetCommandLine(cmd)
+  return "\<C-U>" .. a:cmd
 endfunc
 " }}}
 
@@ -678,25 +724,6 @@ endfunc
 
 func s:AsmCommand()
   call TermDebugSetAsmMode(s:asm_mode ? 0 : 1)
-endfunc
-
-func s:PromptInterrupt()
-  if TermDebugIsStopped()
-    " Clear command line
-    let input = getbufline(s:prompt_bufnr, '$')[0]
-    call s:PromptShowMessage([[input, "Normal"], ["^C", "Cursor"]])
-  else
-    " Send interrupt
-    let interrupt = 2
-    if !exists('s:host')
-      let pid = jobpid(s:gdb_job_id)
-      call v:lua.vim.loop.kill(pid, interrupt)
-    else
-      let kill = printf("kill -%d %d", interrupt, s:pid)
-      call system(["ssh", s:host, kill])
-    endif
-  endif
-  call s:SetCommandLine("")
 endfunc
 
 func s:PromptShowMessage(msg)
@@ -992,6 +1019,8 @@ endfunc
 func s:HandleOption(dict)
   if a:dict['param'] == 'scheduler-locking'
     let s:scheduler_locking = a:dict['value']
+  elseif a:dict['param'] == 'max-completions'
+    let s:max_completions = a:dict['value']
   endif
 endfunc
 " }}}
@@ -1185,7 +1214,7 @@ func s:HandleBreakpointEdit(bp, dict)
   let script = s:Get([], a:dict, 'BreakpointTable', 'body', 'bkpt', 'script')
   if !empty(script) && bufname() == s:prompt_bufname
     call s:OpenFloatEdit(script)
-    augroup TermDebugFloatEdit
+    augroup TermDebug
       exe printf("autocmd! WinClosed * ++once call s:OnBrEditComplete(%d)", a:bp)
     augroup END
   endif
@@ -1249,20 +1278,23 @@ func s:HandleEvaluate(winid, dict)
 endfunc
 
 func s:HandleCompletion(cmd, dict)
-  let matches = a:dict['matches']
-  let matches = filter(matches, "stridx(v:val, a:cmd) == 0 && len(v:val) > len(a:cmd)")
-  if len(a:cmd) > 0 && len(matches) > 0 && (bufname() == s:prompt_bufname)
-    let context = split(a:cmd, " ", 1)[-1]
-    let matches = map(matches, "context .. v:val[len(a:cmd):]")
-    call s:OpenScrollablePreview("Completion", matches)
-    call s:ScrollPreview("1")
-    call s:ClosePreviewOn('InsertLeave')
-    augroup TermDebugCompletion
-      autocmd! TextChangedI <buffer> call s:OpenCompletion()
-    augroup END
-  else
-    call s:ClosePreview()
+  if bufname() != s:prompt_bufname
+    return
   endif
+
+  let context = split(a:cmd, " ", 1)[-1]
+  let matches = a:dict['matches']
+  call filter(matches, "stridx(v:val, a:cmd) == 0 && v:val != a:cmd")
+  call map(matches, "context .. v:val[len(a:cmd):]")
+
+  call s:OpenScrollablePreview("Completion", matches)
+  call s:ScrollPreview("1")
+  call s:ClosePreviewOn('InsertLeave')
+  augroup TermDebugCompletion
+    autocmd! TextChangedI <buffer> call s:OpenCompletion()
+  augroup END
+  " Track this for optimization purposes
+  let s:previous_cmd = a:cmd
 endfunc
 
 func s:HandleInterrupt(cmd, dict)
@@ -1444,7 +1476,7 @@ func s:OpenPreview(title, lines)
   let sizes = map(copy(a:lines), "len(v:val)")
   call add(sizes, len(a:title))
   let width = min([max(sizes), max_width]) + 1
-  let height = min([len(a:lines), max_height])
+  let height = min([max([1, len(a:lines)]), max_height])
 
   " Will height lines + title fit in the OS window?
   if s:WinAbsoluteLine() > height + 2
@@ -1481,17 +1513,17 @@ func s:OpenPreview(title, lines)
   endif
 
   call nvim_win_set_option(s:preview_win, 'wrap', v:false)
-  if line('$', s:preview_win) > 1
-    call deletebufline(nr, 1, '$')
-  endif
+  call deletebufline(nr, 1, '$')
   call setbufline(nr, 1, a:lines)
   return s:preview_win
 endfunc
 
 func s:OpenScrollablePreview(title, lines)
   let winid = s:OpenPreview(a:title, a:lines)
-  call nvim_win_set_option(winid, 'cursorline', v:true)
-  call nvim_win_set_option(winid, 'scrolloff', 2)
+  if !s:EmptyBuffer(nvim_win_get_buf(winid)) 
+    call nvim_win_set_option(winid, 'cursorline', v:true)
+    call nvim_win_set_option(winid, 'scrolloff', 2)
+  endif
 endfunc
 
 func s:IsOpenPreview(title)
@@ -1530,12 +1562,11 @@ func s:GetPreviewLine(expr)
   let nr = winbufnr(s:preview_win)
   let pos = line(a:expr, s:preview_win)
   let res = getbufline(nr, pos)[0]
-  call s:ClosePreview()
   return res
 endfunc
 
 func s:ClosePreviewOn(...)
-  augroup TermDebug
+  augroup TermDebugCompletion
     for event in a:000
       exe printf("autocmd! %s * ++once call s:ClosePreview()", event)
     endfor
@@ -1563,6 +1594,8 @@ func s:EndTermDebug(job_id, exit_code, event)
 
   silent! autocmd! TermDebug
   silent! autocmd! TermDebugCompletion
+
+  call s:ClosePreview()
 
   " Clear signs
   call s:ClearCursorSign()
