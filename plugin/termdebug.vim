@@ -928,8 +928,9 @@ endfunc
 func s:HandleProgramRun(dict)
   if has_key(a:dict, 'pid')
     let s:pid = a:dict['pid']
-    if exists('#User#TermDebugRunPost')
+    if exists('#User#TermDebugRunPost') && !exists('s:program_run_once')
       doauto <nomodeline> User TermDebugRunPost
+      let s:program_run_once = v:true
     endif
   endif
 endfunc
