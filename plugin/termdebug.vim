@@ -1535,7 +1535,7 @@ func s:OpenPreview(title, lines)
   endif
 
   call nvim_win_set_option(s:preview_win, 'wrap', v:false)
-  call deletebufline(nr, 1, '$')
+  silent call deletebufline(nr, 1, '$')
   call setbufline(nr, 1, a:lines)
   return s:preview_win
 endfunc
