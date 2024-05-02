@@ -950,6 +950,10 @@ endfunc
 " Will update the sign that shows the breakpoint
 func s:HandleNewBreakpoint(dict)
   let bkpt = a:dict['bkpt']
+  if bkpt['type'] != 'breakpoint'
+    return
+  endif
+
   if has_key(bkpt, 'pending') && has_key(bkpt, 'number')
     echomsg 'Breakpoint ' . bkpt['number'] . ' (' . bkpt['pending']  . ') pending.'
     return
