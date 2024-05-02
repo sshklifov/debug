@@ -627,13 +627,15 @@ func s:PromptOutput(cmd)
     elseif stridx("return", cmd[0]) == 0 && len(cmd[0]) >= 3
       return s:ReturnCommand()
     endif
-  elseif exists("g:termdebug_override_up_and_down") && g:termdebug_override_up_and_down
+  endif
+  if exists("g:termdebug_override_up_and_down") && g:termdebug_override_up_and_down
     if cmd[0] == "up"
       return s:UpCommand()
     elseif cmd[0] == "down"
       return s:DownCommand()
     endif
-  elseif exists("g:termdebug_override_s_and_n") && g:termdebug_override_s_and_n
+  endif
+  if exists("g:termdebug_override_s_and_n") && g:termdebug_override_s_and_n
     if cmd[0] == "asm"
       return s:AsmCommand()
     elseif cmd[0] == "si" || cmd[0] == "stepi" || cmd[0] == "ni" || cmd[0] == "nexti"
