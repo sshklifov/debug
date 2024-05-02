@@ -428,7 +428,8 @@ func s:CtrlC_Map()
   if TermDebugIsStopped()
     let input = getbufline(s:prompt_bufnr, '$')[0]
     call s:PromptShowMessage([[input, "Normal"], ["^C", "Cursor"]])
-    return s:SetCommandLine("")
+    s:SetCommandLine("")
+    return ''
   else
     " Send interrupt
     let interrupt = 2
@@ -440,6 +441,7 @@ func s:CtrlC_Map()
       call system(["ssh", s:host, kill])
     endif
   endif
+  return ''
 endfunc
 
 func s:CtrlW_Map()
