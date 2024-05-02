@@ -26,13 +26,13 @@ func TermDebugGoToPC()
 endfunc
 
 func TermDebugGoToBreakpoint(...)
-  let id = get(a:000, 0, "")
   " No argument supplied, load breakpoints into quickfix
-  if id == ""
+  if a:0 == 0
     call TermDebugBrToQf()
     return
   endif
 
+  let id = a:1
   if !has_key(s:breakpoints, id)
     echo "No breakpoint " . id
     return
@@ -41,6 +41,11 @@ func TermDebugGoToBreakpoint(...)
   let breakpoint = s:breakpoints[id]
   let lnum = breakpoint['lnum']
   let fullname = breakpoint['fullname']
+  if !filereadable(fullname)
+    echo "No source for " . id
+    return
+  endif
+
   if expand("%:p") != fullname
     exe "e " . fnameescape(fullname)
   endif
@@ -165,10 +170,12 @@ func TermDebugBrToQf()
   let items = map(items(s:breakpoints), {_, item -> {
         \ "text": "Breakpoint " . item[0],
         \ "filename": item[1]['fullname'],
-        \ "lnum": item[1]['lnum']
+        \ "lnum": item[1]['lnum'],
+        \ "valid": filereadable(item[1]['fullname'])
         \ }})
+  call filter(items, "v:val.valid")
   if empty(items)
-    echo "No breakpoints"
+    echo "No breakpoints to show"
   else
     call setqflist([], ' ', {"title": "Breakpoints", "items": items})
     copen
@@ -953,19 +960,19 @@ func s:HandleNewBreakpoint(dict)
       let id = location['number']
       call s:ClearBreakpointSign(id)
       let s:breakpoints[id] = #{
-            \ fullname: location['fullname'],
-            \ lnum: location['line'],
+            \ fullname: get(location, 'fullname', location['addr']),
+            \ lnum: get(location, 'line', 1),
             \ enabled: location['enabled'] == 'y' && bkpt['enabled'] == 'y',
             \ parent: bkpt['number']
             \ }
       call s:PlaceBreakpointSign(id)
     endfor
-  elseif has_key(bkpt, 'fullname')
+  else
     let id = bkpt['number']
     call s:ClearBreakpointSign(id)
     let s:breakpoints[id] = #{
-          \ fullname: bkpt['fullname'],
-          \ lnum: bkpt['line'],
+          \ fullname: get(bkpt, 'fullname', bkpt['addr']),
+          \ lnum: get(bkpt, 'line', 1),
           \ enabled: bkpt['enabled'] == 'y'
           \ }
     call s:PlaceBreakpointSign(id)
