@@ -1367,9 +1367,9 @@ endfunc
 func s:HandleFrameList(going_up, level, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   if a:going_up
-    call filter(frames, "v:val.level > a:level")
+    call filter(frames, "str2nr(v:val.level) > str2nr(a:level)")
   else
-    call filter(frames, "v:val.level < a:level")
+    call filter(frames, "str2nr(v:val.level) < str2nr(a:level)")
     call reverse(frames)
   endif
   let prefix = "/home/" .. $USER
