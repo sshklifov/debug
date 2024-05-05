@@ -645,12 +645,18 @@ func s:PromptOutput(cmd)
   if exists("g:termdebug_override_s_and_n") && g:termdebug_override_s_and_n
     if cmd[0] == "asm"
       return s:AsmCommand()
-    elseif cmd[0] == "si" || cmd[0] == "stepi" || cmd[0] == "ni" || cmd[0] == "nexti"
+    elseif cmd[0] == "si" || cmd[0] == "stepi"
       call TermDebugSetAsmMode(1)
-      " NOTE: follow-through
-    elseif cmd[0] == "s" || cmd[0] == "step" || cmd[0] == "n" || cmd[0] == "next"
+      return s:SendMICommandNoOutput('-exec-step-instruction')
+    elseif cmd[0] == "ni" || cmd[0] == "nexti"
+      call TermDebugSetAsmMode(1)
+      return s:SendMICommandNoOutput('-exec-next-instruction')
+    elseif cmd[0] == "s" || cmd[0] == "step"
       call TermDebugSetAsmMode(0)
-      " NOTE: follow-through
+      return s:SendMICommandNoOutput('-exec-step')
+    elseif cmd[0] == "n" || cmd[0] == "next"
+      call TermDebugSetAsmMode(0)
+      return s:SendMICommandNoOutput('-exec-next')
     endif
   endif
 
@@ -834,7 +840,9 @@ func s:HandleStream(msg)
   endif
   " Show as normal text
   for line in lines
-    call s:PromptShowNormal(line)
+    if line !~ '^[0-9]\+\t'
+      call s:PromptShowNormal(line)
+    endif
   endfor
 endfunc
 
