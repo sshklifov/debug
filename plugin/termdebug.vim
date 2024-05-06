@@ -228,6 +228,7 @@ func TermDebugStart(...)
   const s:eval_exception = "EvalFailedException"
   const s:float_edit_exception = "FloatEditException"
   " Set defaults for required variables
+  let s:vars = []
   let s:breakpoints = #{}
   let s:callbacks = #{}
   let s:pcbuf = -1
@@ -315,6 +316,7 @@ func s:LaunchGdb()
   inoremap <buffer> <Tab> <cmd>call <SID>TabMap("+1")<CR>
   inoremap <buffer> <S-Tab> <cmd>call <SID>TabMap("-1")<CR>
   inoremap <buffer> <expr> <CR> <SID>EnterMap()
+  nnoremap <buffer> <CR> <cmd>call <SID>ExpandCursor(line('.'))<CR>
 
   startinsert
 endfunc
@@ -525,6 +527,7 @@ func s:EnterMap()
 
   call s:EndHistoryScrolling(1)
   call s:EndCompletion()
+  call s:EndPrinting()
   if !TermDebugIsStopped()
     return ''
   endif
@@ -629,6 +632,11 @@ func s:PromptOutput(cmd)
     elseif cmd[0] == "n" || cmd[0] == "next"
       call TermDebugSetAsmMode(0)
       return s:SendMICommandNoOutput('-exec-next')
+    endif
+  endif
+  if exists("g:termdebug_override_p") && g:termdebug_override_p
+    if cmd[0] == "p" || cmd[0] == "print"
+      return s:PrintCommand(join(cmd[1:], " "))
     endif
   endif
 
@@ -747,6 +755,12 @@ endfunc
 
 func s:PromptShowMessage(msg)
   let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
+  call s:PromptPlaceMessage(lnum, a:msg)
+endfunc
+
+" 1-based indexing
+func s:PromptPlaceMessage(where, msg)
+  let lnum = a:where
   let line = join(map(copy(a:msg), "v:val[0]"), '')
   call appendbufline(s:prompt_bufnr, lnum, line)
 
@@ -815,6 +829,91 @@ func s:PromptShowSourceLine()
   endfor
 endfunc
 " }}}
+
+""""""""""""""""""""""""""""""""Printing""""""""""""""""""""""""""""""""""""""{{{
+func s:PrintCommand(expr)
+  let Cb = function('s:ShowValue', [a:expr])
+  call TermDebugSendMICommand('-var-create - * ' . s:EscapeMIArgument(a:expr), Cb)
+endfunc
+
+func s:ShowValue(expr, dict)
+  let var = a:dict
+  call add(s:vars, var['name'])
+  let var['exp'] = a:expr
+  let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
+  call s:ShowElided(lnum, var)
+endfunc
+
+func s:ShowElided(lnum, var)
+  let name = a:var['name']
+  let uiname = a:var['exp']
+  let value = a:var["value"]
+  let recursive = a:var['numchild'] > 0
+  let no_modifiers = substitute(name, '\.protected\|\.public\|\.private', '', 'g')
+  let level = len(substitute(no_modifiers, '[^.]', '', 'g'))
+  let indent = repeat(" ", level * 2)
+
+  let indent_item = [indent, "Normal"]
+  let name_item = [uiname, "Normal"]
+  let type_item = [type, "markdownH6"]
+  let value_item = [value, "markdownCode"]
+  call s:PromptPlaceMessage(a:lnum, [indent_item, name_item, [" = ", "Normal"], value_item])
+  if recursive
+    " Mark the variable
+    let ns = nvim_create_namespace('TermDebugConceal')
+    call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, 0, #{virt_text: [[name, "EndOfBuffer"]]})
+    let col = len(indent) + len(uiname) + 3
+    let opts = #{end_col: col + len(value), hl_group: 'markdownLinkText', priority: 10000}
+    call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, col, opts)
+  endif
+endfunc
+
+func s:ExpandCursor(lnum)
+  let lnum = a:lnum - 1
+  " Index into created marks
+  let ns = nvim_create_namespace('TermDebugConceal')
+  let extmarks = nvim_buf_get_extmarks(0, ns, [lnum, 0], [lnum + 1, 0], #{details: 1})
+  if len(extmarks) < 2
+    return
+  endif
+  " Get the variable name from first mark
+  let index = has_key(extmarks[0][3], 'virt_text') ? 0 : 1
+  let opts = extmarks[index][3]
+  let varname = opts['virt_text'][0][0]
+  " Remove highlights to signal that the link is inactive
+  call nvim_buf_del_extmark(0, ns, extmarks[0][0])
+  call nvim_buf_del_extmark(0, ns, extmarks[1][0])
+  " Load children of variable
+  let Cb = function('s:CollectVarChildren', [lnum + 1])
+  call TermDebugSendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(varname), Cb)
+endfunc
+
+func s:CollectVarChildren(lnum, dict)
+  if !has_key(a:dict, "children")
+    return
+  endif
+  let children = s:GetListWithKeys(a:dict, "children")
+  " Optimize output by removing indirection
+  let ignored = ['public', 'private', 'protected']
+  if len(children) == 1 && index(ignored, children[0]['exp']) >= 0
+    let Cb = function('s:CollectVarChildren', [a:lnum])
+    let name = children[0]['name']
+    return TermDebugSendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(name), Cb)
+  endif
+  for child in children
+    call s:ShowElided(a:lnum, child)
+  endfor
+endfunc
+
+func s:EndPrinting()
+  for varname in s:vars
+    call s:SendMICommandNoOutput('-var-delete ' . varname)
+  endfor
+  let s:vars = []
+  let ns = nvim_create_namespace('TermDebugConceal')
+  call nvim_buf_clear_namespace(0, ns, 0, -1)
+endfunc
+"}}}
 
 """"""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
 func s:CommOutput(msg)
@@ -887,9 +986,7 @@ func s:HandleStream(msg)
   endif
   " Show as normal text
   for line in lines
-    if line !~ '^[0-9]\+\t'
-      call s:PromptShowNormal(line)
-    endif
+    call s:PromptShowNormal(line)
   endfor
 endfunc
 
