@@ -25,14 +25,8 @@ func TermDebugGoToPC()
   end
 endfunc
 
-func TermDebugGoToBreakpoint(...)
-  " No argument supplied, load breakpoints into quickfix
-  if a:0 == 0
-    call TermDebugBrToQf()
-    return
-  endif
-
-  let id = a:1
+func TermDebugGoToBreakpoint(id)
+  let id = a:id
   if !has_key(s:breakpoints, id)
     echo "No breakpoint " . id
     return
@@ -166,36 +160,6 @@ endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Sugar"""""""""""""""""""""""""""""""""""""""""{{{
-func TermDebugBrToQf()
-  let items = map(items(s:breakpoints), {_, item -> {
-        \ "text": "Breakpoint " . item[0],
-        \ "filename": item[1]['fullname'],
-        \ "lnum": item[1]['lnum'],
-        \ "valid": filereadable(item[1]['fullname'])
-        \ }})
-  call filter(items, "v:val.valid")
-  if empty(items)
-    echo "No breakpoints to show"
-  else
-    call setqflist([], ' ', {"title": "Breakpoints", "items": items})
-    copen
-  endif
-endfunc
-
-func TermDebugQfToBr()
-  if !TermDebugIsStopped()
-    echo "Cannot set breakpoints. Program is running."
-    return
-  endif
-  for item in getqflist()
-    let fname = fnamemodify(bufname(item['bufnr']), ":p")
-    let lnum = item['lnum']
-    let loc = fname . ":" . lnum
-    call s:SendMICommandNoOutput("-break-insert " . loc)
-  endfor
-  cclose
-endfunc
-
 func TermDebugEditCommands(...)
   if a:0 > 0 
     let br = a:1
@@ -625,6 +589,10 @@ func s:PromptOutput(cmd)
     return s:HostnameCommand()
   elseif cmd[0] == "whoami" && len(cmd[0]) >= 3
     return s:WhoamiCommand()
+  elseif cmd[0] == "qfsave"
+    return s:QfSaveCommand()
+  elseif cmd[0] == "qfsource"
+    return s:QfSourceCommand()
   endif
 
   " Overriding GDB commands
@@ -717,6 +685,34 @@ func s:WhoamiCommand()
     let user = system(cmd)
     call s:PromptShowNormal("User of inferior process: " .. user)
   endif
+endfunc
+
+func s:QfSourceCommand()
+  if empty(getqflist())
+    return s:PromptShowError("No breakpoints were inserted")
+  endif
+  for item in getqflist()
+    let fname = fnamemodify(bufname(item['bufnr']), ":p")
+    let lnum = item['lnum']
+    let loc = fname . ":" . lnum
+    call TermDebugSendMICommand("-break-insert " . loc, function('s:HandleNewBreakpoint'))
+  endfor
+  call s:PromptShowNormal("Breakpoints loaded from quickfix")
+endfunc
+
+func s:QfSaveCommand()
+  let items = map(items(s:breakpoints), {_, item -> {
+        \ "text": "Breakpoint " . item[0],
+        \ "filename": item[1]['fullname'],
+        \ "lnum": item[1]['lnum'],
+        \ "valid": filereadable(item[1]['fullname'])
+        \ }})
+  call filter(items, "v:val.valid")
+  if empty(items)
+    call s:PromptShowError("No breakpoints")
+  endif
+  call setqflist([], ' ', {"title": "Breakpoints", "items": items})
+  call s:PromptShowNormal("Breakpoints saved in quickfix")
 endfunc
 
 func s:FinishCommand()
