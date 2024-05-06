@@ -540,7 +540,8 @@ func s:EnterMap()
       let cmd = get(s:command_hist, -1, "")
       call s:PromptOutput(cmd)
     endif
-    return ''
+    let silent = exists('g:termdebug_silent_rerun') && g:termdebug_silent_rerun
+    return silent ? "" : "\n"
   endif
 endfunc
 
@@ -563,6 +564,9 @@ endfunc
 
 """"""""""""""""""""""""""""""""Custom commands"""""""""""""""""""""""""""""""{{{
 func s:PromptOutput(cmd)
+  if empty(a:cmd)
+    return
+  endif
   " Check if in command> mode
   if prompt_getprompt(s:prompt_bufnr) =~ 'command>'
     return s:CommandsOutput(a:cmd)
@@ -766,6 +770,50 @@ endfunc
 func s:PromptShowError(msg)
   call s:PromptShowMessage([[a:msg, "ErrorMsg"]])
 endfunc
+
+func s:PromptShowSourceLine()
+  let lnum = line('.')
+  let line = getline(lnum)
+  " Copy source line with syntax
+  let text = ""
+  let text_hl = ""
+  let items = []
+  for i in range(len(line))
+    let hl = synID(lnum, i+1, 1)->synIDattr("name")
+    if hl == text_hl
+      let text ..= line[i]
+    else
+      call add(items, [text, text_hl])
+      let text = line[i]
+      let text_hl = hl
+    endif
+  endfor
+  call add(items, [text, text_hl])
+  call s:PromptShowMessage(items)
+  " Apply extmarks to prompt line
+  let extmarks = nvim_buf_get_extmarks(0, -1, [lnum - 1, 0], [lnum - 1, len(line)], #{details: v:true})
+  let ns = nvim_create_namespace('TermDebugHighlight')
+  let prompt_lnum = nvim_buf_line_count(s:prompt_bufnr) - 2
+  for extm in extmarks
+    let start_col = extm[2]
+    let opts = extm[3]
+    " Ignore breakpoint signs
+    if get(opts, 'sign_text', 0) == 1
+      continue
+    endif
+    " Perform some gymnastics on options
+    let row = extm[1]
+    if get(opts, 'end_row', row) != row
+      continue
+    endif
+    silent! unlet opts['end_row']
+    if has_key(opts, 'end_col') && opts['end_col'] > len(line)
+      let opts['end_col'] = len(line)
+    endif
+    silent! unlet opts['ns_id']
+    call nvim_buf_set_extmark(s:prompt_bufnr, ns, prompt_lnum, start_col, opts)
+  endfor
+endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
@@ -875,6 +923,11 @@ func s:PlaceSourceCursor(dict)
     endif
     exe lnum
     normal z.
+    " Display a hint where we stopped
+    if exists('g:termdebug_show_source') && g:termdebug_show_source
+      call s:PromptShowSourceLine()
+    endif
+    " Highlight stopped line
     call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
     let s:pcbuf = bufnr()
     call win_gotoid(origw)
