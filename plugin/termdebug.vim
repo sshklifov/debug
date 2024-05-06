@@ -868,7 +868,29 @@ endfunc
 
 func s:HandleStream(msg)
   " Ignore textual output from target
-  return
+  if exists('g:termdebug_no_stream_records') && g:termdebug_no_stream_records
+    return
+  endif
+  if a:msg[0] == '@'
+    return
+  endif
+  execute printf('let msg = %s', a:msg[1:])
+  " Join with messages from previous stream record
+  let total = split(s:stream_buf . msg, "\n", 1)
+  let lines = total[:-2]
+  let s:stream_buf = total[-1]
+  " Apply a custom filter
+  if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
+    call filter(lines, 'stridx(v:val, "No such file") < 0')
+    call filter(lines, {k, v -> v !~ '^\d\+\s*in\s*\f\+'})
+    call filter(lines, {k, v -> v !~ '^0x\x\+\s*\d*\s*in\s*\f\+'})
+  endif
+  " Show as normal text
+  for line in lines
+    if line !~ '^[0-9]\+\t'
+      call s:PromptShowNormal(line)
+    endif
+  endfor
 endfunc
 
 " Handle stopping and running message from gdb.
