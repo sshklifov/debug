@@ -228,6 +228,10 @@ func TermDebugStart(...)
   const s:eval_exception = "EvalFailedException"
   const s:float_edit_exception = "FloatEditException"
   " Set defaults for required variables
+  let s:pretty_printers = [
+        \ ['std::vector', "s:PrettyPrinterVector"],
+        \ ['std::string', "s:PrettyPrinterString"],
+        \ ]
   let s:vars = []
   let s:breakpoints = #{}
   let s:callbacks = #{}
@@ -812,7 +816,7 @@ func s:PromptShowSourceLine()
     let start_col = extm[2]
     let opts = extm[3]
     " Ignore breakpoint signs
-    if get(opts, 'sign_text', 0) == 1
+    if has_key(opts, 'sign_text')
       continue
     endif
     " Perform some gymnastics on options
@@ -846,25 +850,48 @@ endfunc
 
 func s:ShowElided(lnum, var)
   let name = a:var['name']
-  let uiname = a:var['exp']
-  let value = a:var["value"]
-  let recursive = a:var['numchild'] > 0
-  let no_modifiers = substitute(name, '\.protected\|\.public\|\.private', '', 'g')
-  let level = len(substitute(no_modifiers, '[^.]', '', 'g'))
-  let indent = repeat(" ", level * 2)
+  let is_pretty = v:false
+  if has_key(a:var, 'type')
+    let type = a:var['type']
+    for idx in range(len(s:pretty_printers))
+      let printer = s:pretty_printers[idx]
+      if type =~# printer[0]
+        let pretty_idx = idx
+        let is_pretty = v:true
+        break
+      endif
+    endfor
+  endif
 
+  let indent = s:GetVariableIndent(name)
+  let uiname = a:var['exp']
+  let value = is_pretty ? "<...>" : a:var["value"]
   let indent_item = [indent, "Normal"]
-  let name_item = [uiname, "Normal"]
+  let name_item = [uiname .. " = ", "Normal"]
   let value_item = [value, "markdownCode"]
-  call s:PromptPlaceMessage(a:lnum, [indent_item, name_item, [" = ", "Normal"], value_item])
+  call s:PromptPlaceMessage(a:lnum, [indent_item, name_item, value_item])
   if recursive
+  if is_pretty || a:var['numchild'] > 0
     " Mark the variable
+    let key = (is_pretty ? string(pretty_idx) : "") .. name
     let ns = nvim_create_namespace('TermDebugConceal')
-    call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, 0, #{virt_text: [[name, "EndOfBuffer"]]})
-    let col = len(indent) + len(uiname) + 3
-    let opts = #{end_col: col + len(value), hl_group: 'markdownLinkText', priority: 10000}
+    call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, 0, #{virt_text: [[key, "EndOfBuffer"]]})
+    let col = len(indent_item[0]) + len(name_item[0])
+    let opts = #{end_col: col + len(value_item[0]), hl_group: 'markdownLinkText', priority: 10000}
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, col, opts)
   endif
+endfunc
+
+func s:GetVariableIndent(varname, ...)
+  let parts = split(a:varname, '\.')
+  let ignored = ["protected", "private", "public"]
+  call filter(parts, "index(ignored, v:val) < 0")
+  let level = len(parts) - 1
+  if a:0 > 0
+    let level += a:1
+  endif
+  let width = getbufvar(s:prompt_bufnr, '&sw')
+  return repeat(" ", level * width)
 endfunc
 
 func s:ExpandCursor(lnum)
@@ -883,8 +910,15 @@ func s:ExpandCursor(lnum)
   call nvim_buf_del_extmark(0, ns, extmarks[0][0])
   call nvim_buf_del_extmark(0, ns, extmarks[1][0])
   " Load children of variable
-  let Cb = function('s:CollectVarChildren', [lnum + 1])
-  call TermDebugSendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(varname), Cb)
+  if key[0] =~ '[0-9]'
+    let idx = str2nr(key)
+    let Cb = function(s:pretty_printers[idx][1])
+    let name = key[len(idx):]
+    return s:ShowPrettyVar(a:lnum, name, Cb)
+  else
+    let Cb = function('s:CollectVarChildren', [lnum + 1])
+    call TermDebugSendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(key), Cb)
+  endif
 endfunc
 
 func s:CollectVarChildren(lnum, dict)
@@ -893,10 +927,10 @@ func s:CollectVarChildren(lnum, dict)
   endif
   let children = s:GetListWithKeys(a:dict, "children")
   " Optimize output by removing indirection
-  let optimized_exp = ['public', 'private', 'protected']
+  let optimized_exps = ['public', 'private', 'protected']
   let optimized = []
   for child in children
-    if index(optimized_exp, child['exp']) >= 0
+    if index(optimized_exps, child['exp']) >= 0
       call add(optimized, child)
     else
       call s:ShowElided(a:lnum, child)
@@ -907,6 +941,47 @@ func s:CollectVarChildren(lnum, dict)
     let name = child['name']
     call TermDebugSendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(name), Cb)
   endfor
+endfunc
+
+func s:ShowPrettyVar(lnum, varname, PrettyPrinter)
+  let indent = s:GetVariableIndent(a:varname, 1)
+  let Cb = function('s:ShowPrettyVarResolved', [a:lnum, indent, a:PrettyPrinter])
+  call TermDebugSendMICommand('-var-info-path-expression ' .. a:varname, Cb)
+endfunc
+
+func s:ShowPrettyVarResolved(lnum, indent, PrettyPrinter, resolved)
+  let fields = a:PrettyPrinter(a:resolved['path_expr'])
+  for field in reverse(fields)
+    let [recurse, name, expr] = field
+    if !recurse
+      let prefix = a:indent .. name .. " = "
+      let Cb = function('s:ShowPrettyField', [a:lnum, prefix])
+      call TermDebugSendMICommand('-data-evaluate-expression ' . s:EscapeMIArgument(expr), Cb)
+    else
+      call s:PromptPlaceMessage(a:lnum, [[a:indent .. "Recursive fields are TODO", "ErrorMsg"]])
+    endif
+  endfor
+endfunc
+
+func s:ShowPrettyField(lnum, prefix, dict)
+  let value = a:dict['value']
+  call s:PromptPlaceMessage(a:lnum, [[a:prefix, 'Normal'], [value, 'markdownCode']])
+endfunc
+
+func TermDebugPrettyPrinter(regex, func)
+  call add(s:pretty_printers, [a:regex, a:func])
+endfunc
+
+func s:PrettyPrinterVector(expr)
+  let start_expr = printf('%s._M_impl._M_start', a:expr)
+  let length_expr = printf('%s._M_impl._M_finish-%s._M_impl._M_start', a:expr, a:expr)
+  return [[0, 'start', start_expr], [0, 'length', length_expr]]
+endfunc
+
+func s:PrettyPrinterString(expr)
+  let str_expr = printf('%s._M_dataplus._M_p', a:expr)
+  let length_expr = printf('%s._M_string_length', a:expr)
+  return [[0, 'string', str_expr], [0, 'length', length_expr]]
 endfunc
 
 func s:EndPrinting()
