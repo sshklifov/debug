@@ -870,7 +870,7 @@ func s:ShowElided(lnum, var)
   let name_item = [uiname .. " = ", "Normal"]
   let value_item = [value, "markdownCode"]
   call s:PromptPlaceMessage(a:lnum, [indent_item, name_item, value_item])
-  if recursive
+
   if is_pretty || a:var['numchild'] > 0
     " Mark the variable
     let key = (is_pretty ? string(pretty_idx) : "") .. name
@@ -905,7 +905,7 @@ func s:ExpandCursor(lnum)
   " Get the variable name from first mark
   let index = has_key(extmarks[0][3], 'virt_text') ? 0 : 1
   let opts = extmarks[index][3]
-  let varname = opts['virt_text'][0][0]
+  let key = opts['virt_text'][0][0]
   " Remove highlights to signal that the link is inactive
   call nvim_buf_del_extmark(0, ns, extmarks[0][0])
   call nvim_buf_del_extmark(0, ns, extmarks[1][0])
