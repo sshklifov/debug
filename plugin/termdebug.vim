@@ -426,7 +426,7 @@ func s:CtrlW_Map()
   return repeat("\<BS>", n)
 endfunc
 
-func s:TabMap(expr)
+func s:TabMap()
   " XXX: CAN'T close preview window here because of <expr> map
   if s:IsOpenPreview('Completion')
     let cmp = s:GetPreviewLine('.')
@@ -893,14 +893,19 @@ func s:CollectVarChildren(lnum, dict)
   endif
   let children = s:GetListWithKeys(a:dict, "children")
   " Optimize output by removing indirection
-  let ignored = ['public', 'private', 'protected']
-  if len(children) == 1 && index(ignored, children[0]['exp']) >= 0
-    let Cb = function('s:CollectVarChildren', [a:lnum])
-    let name = children[0]['name']
-    return TermDebugSendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(name), Cb)
-  endif
+  let optimized_exp = ['public', 'private', 'protected']
+  let optimized = []
   for child in children
-    call s:ShowElided(a:lnum, child)
+    if index(optimized_exp, child['exp']) >= 0
+      call add(optimized, child)
+    else
+      call s:ShowElided(a:lnum, child)
+    endif
+  endfor
+  for child in optimized
+    let Cb = function('s:CollectVarChildren', [a:lnum])
+    let name = child['name']
+    call TermDebugSendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(name), Cb)
   endfor
 endfunc
 
