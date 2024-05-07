@@ -311,10 +311,13 @@ func s:LaunchGdb()
   inoremap <buffer> <expr> <C-d> <SID>CtrlD_Map()
   inoremap <buffer> <expr> <C-c> <SID>CtrlC_Map()
   inoremap <buffer> <expr> <C-w> <SID>CtrlW_Map()
+  inoremap <buffer> <C-Space> <cmd>call <SID>CtrlSpace_Map()<CR>
+  inoremap <buffer> <C-n> <cmd>call <SID>ScrollPreview("+1")<CR>
+  inoremap <buffer> <C-p> <cmd>call <SID>ScrollPreview("-1")<CR>
+  inoremap <buffer> <expr> <C-y> <SID>TabMap()
   inoremap <buffer> <expr> <Up> <SID>ArrowMap("-1")
   inoremap <buffer> <expr> <Down> <SID>ArrowMap("+1")
-  inoremap <buffer> <Tab> <cmd>call <SID>TabMap("+1")<CR>
-  inoremap <buffer> <S-Tab> <cmd>call <SID>TabMap("-1")<CR>
+  inoremap <buffer> <expr> <Tab> <SID>TabMap()
   inoremap <buffer> <expr> <CR> <SID>EnterMap()
   nnoremap <buffer> <CR> <cmd>call <SID>ExpandCursor(line('.'))<CR>
 
@@ -424,11 +427,22 @@ func s:CtrlW_Map()
 endfunc
 
 func s:TabMap(expr)
+  " XXX: CAN'T close preview window here because of <expr> map
   if s:IsOpenPreview('Completion')
-    call s:ScrollPreview(a:expr)
+    let cmp = s:GetPreviewLine('.')
+    let cmd_parts = split(s:GetCommandLine(), " ", 1)
+    let cmd_parts[-1] = cmp
+    return s:SetCommandLine(join(cmd_parts, " "))
   elseif s:IsOpenPreview('History')
-    call s:ScrollPreview(a:expr)
-  elseif empty(s:GetCommandLine())
+    let cmdline = s:SetCommandLine(s:GetPreviewLine('.'))
+    return cmdline
+  else
+    return ""
+  endif
+endfunc
+
+func s:CtrlSpace_Map()
+  if empty(s:GetCommandLine())
     call s:OpenHistory()
   else
     call s:OpenCompletion()
@@ -452,13 +466,15 @@ func s:OpenCompletion()
       if stridx(cmd, s:previous_cmd) == 0 && cmd[-1:-1] !~ '\s'
         let matches = filter(getbufline(nr, 1, '$'), 'stridx(v:val, context) == 0 && v:val != context')
         " Just refresh the preview
-        call s:OpenScrollablePreview("Completion", matches)
-        call s:ScrollPreview("1")
-        let s:previous_cmd = cmd
+        if empty(matches)
+          call s:ClosePreview()
+        else
+          call s:OpenScrollablePreview("Completion", matches)
+          call s:ScrollPreview("1")
+          let s:previous_cmd = cmd
+        endif
+        return
       endif
-    elseif stridx(s:previous_cmd, cmd) == 0
-      let s:previous_cmd = cmd
-      return
     endif
   endif
   " Need to refetch completions from GDB
@@ -509,22 +525,6 @@ func s:EndHistoryScrolling(force)
 endfunc
 
 func s:EnterMap()
-  if s:IsOpenPreview('Completion')
-    let cmp = s:GetPreviewLine('.')
-    if !empty(cmp)
-      let cmd_parts = split(s:GetCommandLine(), " ", 1)
-      let cmd_parts[-1] = cmp
-      return s:SetCommandLine(join(cmd_parts, " "))
-    else
-      call s:ClosePreview()
-      " NOTE: follow-through
-    endif
-  elseif s:IsOpenPreview('History')
-    let cmdline = s:SetCommandLine(s:GetPreviewLine('.'))
-    call s:ClosePreview()
-    return cmdline
-  endif
-
   call s:EndHistoryScrolling(1)
   call s:EndCompletion()
   call s:EndPrinting()
@@ -855,7 +855,6 @@ func s:ShowElided(lnum, var)
 
   let indent_item = [indent, "Normal"]
   let name_item = [uiname, "Normal"]
-  let type_item = [type, "markdownH6"]
   let value_item = [value, "markdownCode"]
   call s:PromptPlaceMessage(a:lnum, [indent_item, name_item, [" = ", "Normal"], value_item])
   if recursive
@@ -1463,6 +1462,9 @@ func s:HandleCompletion(cmd, dict)
   let matches = a:dict['matches']
   call filter(matches, "stridx(v:val, a:cmd) == 0 && v:val != a:cmd")
   call map(matches, "context .. v:val[len(a:cmd):]")
+  if len(matches) == 0
+    return s:EndCompletion()
+  endif
 
   call s:OpenScrollablePreview("Completion", matches)
   call s:ScrollPreview("1")
@@ -1730,6 +1732,9 @@ func s:IsOpenPreview(title)
 endfunc
 
 func s:ScrollPreview(expr)
+  if !exists('s:preview_win')
+    return
+  endif
   let num_lines = line('$', s:preview_win)
   let curr = line('.', s:preview_win)
   if a:expr == '1'
