@@ -241,7 +241,6 @@ func TermDebugStart(...)
   let s:asm_mode = 0
   let s:sourcewin = win_getid()
   let s:comm_buf = ""
-  let s:stream_buf = ""
   let s:token_counter = 1
   if a:0 > 0
     let s:host = a:1
@@ -651,7 +650,12 @@ func s:PromptOutput(cmd)
     endif
   endif
 
-  " Regular command
+  " Open new float window
+  call s:OpenFloatEdit(80, 20, [])
+  augroup TermDebugCommands
+    autocmd! WinClosed * call s:CloseFloatEdit()
+  augroup END
+  " Run command and redirect output to the window
   let msg = '-interpreter-exec console ' . s:EscapeMIArgument(a:cmd)
   call s:SendMICommandNoOutput(msg)
 endfunc
@@ -1069,28 +1073,14 @@ func s:HandleResult(msg)
 endfunc
 
 func s:HandleStream(msg)
-  " Ignore textual output from target
-  if exists('g:termdebug_no_stream_records') && g:termdebug_no_stream_records
-    return
-  endif
-  if a:msg[0] == '@'
-    return
-  endif
   execute printf('let msg = %s', a:msg[1:])
-  " Join with messages from previous stream record
-  let total = split(s:stream_buf . msg, "\n", 1)
-  let lines = total[:-2]
-  let s:stream_buf = total[-1]
-  " Apply a custom filter
-  if exists('g:termdebug_ignore_no_such') && g:termdebug_ignore_no_such
-    call filter(lines, 'stridx(v:val, "No such file") < 0')
-    call filter(lines, {k, v -> v !~ '^\d\+\s*in\s*\f\+'})
-    call filter(lines, {k, v -> v !~ '^0x\x\+\s*\d*\s*in\s*\f\+'})
+  let lines = split(msg, "\n", 1)
+  if exists('s:edit_win')
+    let bufnr = winbufnr(s:edit_win)
+    let last_line = getbufline(bufnr, '$')[0] .. lines[0]
+    call setbufline(bufnr, '$', last_line)
+    call appendbufline(bufnr, '$', lines[1:])
   endif
-  " Show as normal text
-  for line in lines
-    call s:PromptShowNormal(line)
-  endfor
 endfunc
 
 " Handle stopping and running message from gdb.
@@ -1491,7 +1481,7 @@ endfunc
 func s:HandleBreakpointEdit(bp, dict)
   let script = s:Get([], a:dict, 'BreakpointTable', 'body', 'bkpt', 'script')
   if !empty(script) && bufname() == s:prompt_bufname
-    call s:OpenFloatEdit(script)
+    call s:OpenFloatEdit(20, len(script), script)
     augroup TermDebugCommands
       exe printf("autocmd! WinClosed * call s:OnEditComplete(%d)", a:bp)
     augroup END
@@ -1624,7 +1614,7 @@ endfunc
 
 func s:HandleFrameLevel(going_up, dict)
   let level = s:Get(0, a:dict, 'frame', 'level')
-  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameList', [a:going_up, level]))
+  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameJump', [a:going_up, level]))
 endfunc
 
 " TODO idea place markdown links everywhere :)))
@@ -1764,21 +1754,18 @@ func s:WinAbsoluteLine()
   return result[0] ? result[1] : 0
 endfunc
 
-func s:OpenFloatEdit(lines)
+func s:OpenFloatEdit(width, height, lines)
   if exists('s:edit_win')
     throw s:float_edit_exception
   endif
-
-  const width = 20
-  const height = 5
-  let row = (nvim_win_get_height(0) - height) / 2
-  let col = (nvim_win_get_width(0) - width) / 2
+  let row = (nvim_win_get_height(0) - a:height) / 2
+  let col = (nvim_win_get_width(0) - a:width) / 2
   let opts = #{
         \ relative: "win",
         \ row: row,
         \ col: col,
-        \ width: width,
-        \ height: height,
+        \ width: a:width,
+        \ height: a:height,
         \ focusable: 1,
         \ style: "minimal",
         \ border: "single",
