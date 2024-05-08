@@ -976,7 +976,7 @@ endfunc
 func s:ShowPrettyVar(lnum, varname, PrettyPrinter)
   let indent = s:GetVariableIndent(a:varname, 1)
   let Cb = function('s:ShowPrettyVarResolved', [a:lnum, indent, a:PrettyPrinter])
-  call TermDebugSendMICommand('-var-info-path-expression ' .. a:varname, Cb)
+  call TermDebugSendMICommand('-var-info-path-expression ' .. s:EscapeMIArgument(a:varname), Cb)
 endfunc
 
 func s:ShowPrettyVarResolved(lnum, indent, PrettyPrinter, resolved)
