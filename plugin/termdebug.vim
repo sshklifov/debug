@@ -1680,6 +1680,11 @@ func s:HandleFrameJump(going_up, level, dict)
       return
     endif
   endfor
+  if a:going_up
+    call s:PromptShowError("At topmost frame")
+  else
+    call s:PromptShowError("At bottom of stack")
+  endif
 endfunc
 
 func s:HandleBacktrace(dict)
