@@ -670,12 +670,14 @@ func s:PromptOutput(cmd)
   endif
 
   " Open new float window
-  call s:OpenFloatEdit(20, 1, [])
-  augroup TermDebugFloatEdit
-    autocmd! WinClosed * call s:CloseFloatEdit()
-  augroup END
+  if exists('g:termdebug_floating_output') && g:termdebug_floating_output
+    call s:OpenFloatEdit(20, 1, [])
+    augroup TermDebugFloatEdit
+      autocmd! WinClosed * call s:CloseFloatEdit()
+    augroup END
+  endif
   " Run command and redirect output to the window
-  call s:SendMICommandNoOutput(cmd_console)
+  return s:SendMICommandNoOutput(cmd_console)
 endfunc
 
 func s:CommandsCommand(cmd)
@@ -766,7 +768,6 @@ endfunc
 
 func s:FrameCommand(level)
   if !empty(a:level)
-    let level = 1
     let cmd = printf('-stack-info-frame --frame %d --thread %d', a:level, s:selected_thread)
     call TermDebugSendMICommand(cmd, function('s:HandleFrameChange'))
   else
@@ -1651,9 +1652,8 @@ endfunc
 func s:HandleFrameChange(dict)
   let frame = a:dict['frame']
   call s:ShowFrame(frame)
-  let level = frame['level']
-  let cmd = printf('-interpreter-exec console "frame %d"', level)
-  call s:SendMICommandNoOutput(cmd)
+  call s:ClearCursorSign()
+  call s:PlaceCursorSign(a:dict)
 endfunc
 
 func s:HandleFrameList(dict)
@@ -1675,10 +1675,8 @@ func s:HandleFrameJump(going_up, level, dict)
   for frame in frames
     let fullname = s:Get('', frame, 'fullname')
     if filereadable(fullname) && stridx(fullname, prefix) == 0
-      if TermDebugIsStopped()
-        let cmd = printf('-interpreter-exec console "frame %d"', frame['level'])
-        call s:SendMICommandNoOutput(cmd)
-      endif
+      call s:ClearCursorSign()
+      call s:PlaceCursorSign(frame)
       return
     endif
   endfor
