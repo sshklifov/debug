@@ -154,7 +154,8 @@ func TermDebugSetAsmMode(asm_mode)
   if s:asm_mode != a:asm_mode
     let s:asm_mode = a:asm_mode
     call s:ClearCursorSign()
-    call TermDebugSendMICommand('-stack-info-frame', function('s:PlaceCursorSign'))
+    let cmd = printf('-stack-info-frame --thread %d --frame %d', s:selected_thread, s:selected_frame)
+    call TermDebugSendMICommand(cmd, function('s:PlaceCursorSign'))
   endif
 endfunc
 " }}}
@@ -756,11 +757,11 @@ func s:ReturnCommand()
 endfunc
 
 func s:UpCommand()
-  call TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:true]))
+  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameChange', [v:true]))
 endfunc
 
 func s:DownCommand()
-  call TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameLevel', [v:false]))
+  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameChange', [v:false]))
 endfunc
 
 func s:AsmCommand()
@@ -768,12 +769,9 @@ func s:AsmCommand()
 endfunc
 
 func s:FrameCommand(level)
-  if !empty(a:level)
-    let cmd = printf('-stack-info-frame --frame %d --thread %d', a:level, s:selected_thread)
-    call TermDebugSendMICommand(cmd, function('s:HandleFrameChange'))
-  else
-    call TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameChange'))
-  endif
+  let level = empty(a:level) ? s:selected_frame : a:level
+  let cmd = printf('-stack-info-frame --frame %d --thread %d', level, s:selected_thread)
+  call TermDebugSendMICommand(cmd, function('s:HandleFrameJump', [level]))
 endfunc
 
 func s:BacktraceCommand(max_levels)
@@ -1103,6 +1101,7 @@ func s:HandleCursor(class, dict)
       let s:selected_thread = a:dict['thread-id']
     endif
     let s:stopped = 1
+    let s:selected_frame = 0
   elseif a:class == 'running'
     let id = a:dict['thread-id']
     if id == 'all' || (exists('s:selected_thread') && id == s:selected_thread)
@@ -1652,11 +1651,6 @@ func s:HandleDisassemble(addr, dict)
   call s:SelectAsmAddr(a:addr)
 endfunc
 
-func s:HandleFrameLevel(going_up, dict)
-  let level = s:Get(0, a:dict, 'frame', 'level')
-  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameJump', [a:going_up, level]))
-endfunc
-
 " TODO idea place markdown links everywhere :)))
 func s:ShowFrame(dict)
   let frame = a:dict
@@ -1674,8 +1668,9 @@ func s:ShowFrame(dict)
   call s:PromptShowMessage([level_item, in_item, where_item, at_item, loc_item])
 endfunc
 
-func s:HandleFrameChange(dict)
+func s:HandleFrameJump(level, dict)
   let frame = a:dict['frame']
+  let s:selected_frame = a:level
   call s:ShowFrame(frame)
   call s:ClearCursorSign()
   call s:PlaceCursorSign(a:dict)
@@ -1688,18 +1683,19 @@ func s:HandleFrameList(dict)
   endfor
 endfunc
 
-func s:HandleFrameJump(going_up, level, dict)
+func s:HandleFrameChange(going_up, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   if a:going_up
-    call filter(frames, "str2nr(v:val.level) > str2nr(a:level)")
+    call filter(frames, "str2nr(v:val.level) > s:selected_frame")
   else
-    call filter(frames, "str2nr(v:val.level) < str2nr(a:level)")
+    call filter(frames, "str2nr(v:val.level) < s:selected_frame")
     call reverse(frames)
   endif
   let prefix = "/home/" .. $USER
   for frame in frames
     let fullname = s:Get('', frame, 'fullname')
     if filereadable(fullname) && stridx(fullname, prefix) == 0
+      let s:selected_frame = frame['level']
       call s:ClearCursorSign()
       call s:PlaceCursorSign(#{frame: frame})
       return
