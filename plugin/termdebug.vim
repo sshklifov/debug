@@ -642,7 +642,7 @@ func s:PromptOutput(cmd)
       return s:PrintCommand(join(cmd[1:], " "))
     endif
   endif
-  if exists("g:termdebug_override_f_bt_where") && g:termdebug_override_f_bt_where
+  if exists("g:termdebug_override_f_and_bt") && g:termdebug_override_f_and_bt
     if stridx("frame", cmd[0]) == 0 && len(cmd[0]) >= 1
       return s:FrameCommand(join(cmd[1:], " "))
     elseif (stridx("backtrace", cmd[0]) == 0 && len(cmd[0]) >= 1) || cmd[0] == "bt"
