@@ -652,7 +652,7 @@ func s:PromptOutput(cmd)
 
   " Open new float window
   call s:OpenFloatEdit(20, 1, [])
-  augroup TermDebugCommands
+  augroup TermDebugFloatEdit
     autocmd! WinClosed * call s:CloseFloatEdit()
   augroup END
   " Run command and redirect output to the window
@@ -1485,7 +1485,7 @@ func s:HandleBreakpointEdit(bp, dict)
   let script = s:Get([], a:dict, 'BreakpointTable', 'body', 'bkpt', 'script')
   if !empty(script) && bufname() == s:prompt_bufname
     call s:OpenFloatEdit(20, len(script), script)
-    augroup TermDebugCommands
+    augroup TermDebugFloatEdit
       exe printf("autocmd! WinClosed * call s:OnEditComplete(%d)", a:bp)
     augroup END
   endif
@@ -1498,10 +1498,6 @@ func s:OnEditComplete(bp)
   let commands = map(commands, {k, v -> '"' . v . '"'})
   let msg = printf("-break-commands %d %s", a:bp, join(commands, " "))
   call TermDebugSendMICommand(msg, {_ -> s:PromptShowNormal("Breakpoint commands updated")})
-
-  if exists('#TermDebugCommands')
-    au! TermDebugCommands
-  endif
 endfunc
 
 func s:HandleSymbolInfo(dict)
@@ -1723,6 +1719,8 @@ func s:CollectThreads(pat, id, dict)
 endfunc
 
 func s:HandleError(dict)
+  call s:ClosePreview()
+  call s:CloseFloatEdit()
   let lines = split(a:dict['msg'], "\n")
   for line in lines
     call s:PromptShowError(line)
@@ -1798,6 +1796,9 @@ func s:OpenFloatEdit(width, height, ...)
 endfunc
 
 func s:CloseFloatEdit()
+  if exists('#TermDebugFloatEdit')
+    au! TermDebugFloatEdit
+  endif
   if exists('s:edit_win')
     let nr = winbufnr(s:edit_win)
     call nvim_buf_delete(nr, #{force: 1})
@@ -1913,14 +1914,14 @@ func s:ClosePreviewOn(...)
 endfunc
 
 func s:ClosePreview()
+  if exists('#TermDebugPreview')
+    au! TermDebugPreview
+  endif
   if exists("s:preview_win")
     let nr = winbufnr(s:preview_win)
     call nvim_win_close(s:preview_win, 1)
     call nvim_buf_delete(nr, #{force: 1})
     unlet s:preview_win
-  endif
-  if exists('#TermDebugPreview')
-    au! TermDebugPreview
   endif
 endfunc
 "}}}
@@ -1933,8 +1934,8 @@ func s:EndTermDebug(job_id, exit_code, event)
 
   silent! autocmd! TermDebug
   silent! autocmd! TermDebugPreview
+  silent! autocmd! TermDebugFloatEdit
   silent! autocmd! TermDebugHistory
-  silent! autocmd! TermDebugCommands
   silent! autocmd! TermDebugCompletion
 
   call s:ClosePreview()
