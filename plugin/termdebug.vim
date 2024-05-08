@@ -643,6 +643,13 @@ func s:PromptOutput(cmd)
       return s:PrintCommand(join(cmd[1:], " "))
     endif
   endif
+  if exists("g:termdebug_override_f_bt_where") && g:termdebug_override_f_bt_where
+    if stridx("frame", cmd[0]) == 0 && len(cmd[0]) >= 1
+      return s:FrameCommand(join(cmd[1:], " "))
+    elseif (stridx("backtrace", cmd[0]) == 0 && len(cmd[0]) >= 1) || cmd[0] == "bt"
+      return s:BacktraceCommand(join(cmd[1:], " "))
+    endif
+  endif
 
   " Regular command
   let msg = '-interpreter-exec console ' . s:EscapeMIArgument(a:cmd)
@@ -659,7 +666,6 @@ func s:CommandsCommand(cmd)
       call add(brs, last_br)
     endif
   endif
-
   for brk in brs
     if !has_key(s:breakpoints, brk)
       call s:PromptShowError("No breakpoint number " . brk)
@@ -755,6 +761,24 @@ endfunc
 
 func s:AsmCommand()
   call TermDebugSetAsmMode(s:asm_mode ? 0 : 1)
+endfunc
+
+func s:FrameCommand(level)
+  if !empty(a:level)
+    let level = 1
+    let cmd = printf('-stack-info-frame --frame %d --thread %d', a:level, s:selected_thread)
+    call TermDebugSendMICommand(cmd, function('s:HandleFrameChange'))
+  else
+    call TermDebugSendMICommand('-stack-info-frame', function('s:HandleFrameChange'))
+  endif
+endfunc
+
+func s:BacktraceCommand(max_levels)
+  if !empty(a:max_levels)
+    call TermDebugSendMICommand('-stack-list-frames 0 ' .. a:max_levels, function('s:HandleFrameList'))
+  else
+    call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameList'))
+  endif
 endfunc
 
 func s:PromptShowMessage(msg)
@@ -1603,7 +1627,39 @@ func s:HandleFrameLevel(going_up, dict)
   call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameList', [a:going_up, level]))
 endfunc
 
-func s:HandleFrameList(going_up, level, dict)
+" TODO idea place markdown links everywhere :)))
+func s:ShowFrame(dict)
+  let frame = a:dict
+  let location = "???"
+  if has_key(frame, 'file')
+    let location = printf("%s:%d", frame['file'], frame['line'])
+  endif
+  let where = has_key(frame, 'func') ? frame['func'] : frame['addr']
+
+  let level_item = ["#" .. frame['level'], 'markdownH2']
+  let in_item = [" in ", 'Normal']
+  let where_item = [where, 'markdownH5']
+  let at_item = [" at ", 'Normal']
+  let loc_item = [location, 'Normal']
+  call s:PromptShowMessage([level_item, in_item, where_item, at_item, loc_item])
+endfunc
+
+func s:HandleFrameChange(dict)
+  let frame = a:dict['frame']
+  call s:ShowFrame(frame)
+  let level = frame['level']
+  let cmd = printf('-interpreter-exec console "frame %d"', level)
+  call s:SendMICommandNoOutput(cmd)
+endfunc
+
+func s:HandleFrameList(dict)
+  let frames = s:GetListWithKeys(a:dict, 'stack')
+  for frame in frames
+    call s:ShowFrame(frame)
+  endfor
+endfunc
+
+func s:HandleFrameJump(going_up, level, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   if a:going_up
     call filter(frames, "str2nr(v:val.level) > str2nr(a:level)")
