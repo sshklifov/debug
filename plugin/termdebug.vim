@@ -665,6 +665,7 @@ func s:PromptOutput(cmd)
         \ name->s:IsCommand("disable", 3) || name->s:IsCommand("enable", 2) ||
         \ name->s:IsCommand("break", 2) || name->s:IsCommand("tbreak", 2) ||
         \ name->s:IsCommand("awatch", 2) || name->s:IsCommand("rwatch", 2) ||
+        \ name->s:IsCommand("continue", 4) || name == "c" ||
         \ name->s:IsCommand("watch", 2)
     return s:SendMICommandNoOutput(cmd_console)
   endif
@@ -1096,6 +1097,7 @@ func s:HandleCursor(class, dict)
   if a:class == 'thread-selected'
     let s:selected_thread = a:dict['id']
   elseif a:class == 'stopped'
+    call s:ShowStopReason(a:dict)
     " Key might be missing when e.g. stopped due do signal (thread group exited)
     if has_key(a:dict, 'thread-id')
       let s:selected_thread = a:dict['thread-id']
@@ -1118,6 +1120,29 @@ func s:HandleCursor(class, dict)
   call s:ClearCursorSign()
   if s:stopped
     call s:PlaceCursorSign(a:dict)
+  endif
+endfunc
+
+func s:ShowStopReason(dict)
+  let reason = a:dict['reason']
+  if reason == 'breakpoint-hit'
+    call s:PromptShowNormal("Breakpoint hit")
+  elseif reason == 'watchpoint-scope'
+    call s:PromptShowError("Watchpoint out of scope!")
+  elseif reason == 'no-history'
+    call s:PromptShowError("Cannot continue reverse execution!")
+  elseif reason =~ 'watchpoint'
+    call s:PromptShowNormal("Watchpoint hit")
+  elseif reason == 'exited-signalled'
+    call s:PromptShowWarning("Process exited due to signal: " .. a:dict['signal-name'])
+  elseif reason == 'exited'
+    call s:PromptShowWarning("Process exited with code " .. a:dict['exit-code'])
+  elseif reason == 'exited-normally'
+    call s:PromptShowNormal("Process exited normally. ")
+  elseif reason == 'signal-received'
+    call s:PromptShowNormal("Process received signal: " .. a:dict['signal-name'])
+  elseif reason == 'solib-event' || reason =~ 'fork' || reason =~ 'syscall' || reason == 'exec'
+    call s:PromptShowNormal("Stopped due to event: " .. reason)
   endif
 endfunc
 
@@ -1676,7 +1701,7 @@ func s:HandleFrameJump(going_up, level, dict)
     let fullname = s:Get('', frame, 'fullname')
     if filereadable(fullname) && stridx(fullname, prefix) == 0
       call s:ClearCursorSign()
-      call s:PlaceCursorSign(frame)
+      call s:PlaceCursorSign(#{frame: frame})
       return
     endif
   endfor
