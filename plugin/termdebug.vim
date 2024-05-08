@@ -569,6 +569,10 @@ endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Custom commands"""""""""""""""""""""""""""""""{{{
+func s:IsCommand(str, req, len)
+  return stridx(a:req, a:str) == 0 && len(a:str) >= a:len
+endfunc
+
 func s:PromptOutput(cmd)
   if empty(a:cmd)
     return
@@ -579,75 +583,87 @@ func s:PromptOutput(cmd)
   endif
 
   let cmd = split(a:cmd, " ")
+  let name = cmd[0]
+  let args = join(cmd[1:], " ")
 
   " Remapped commands (required in order to work)
-  if stridx("commands", cmd[0]) == 0 && len(cmd[0]) >= 3
+  if name->s:IsCommand("commands", 3)
     return s:CommandsCommand(cmd)
   endif
 
   " Unsupported commands (need remapping)
-  if stridx("python", cmd[0]) == 0 && len(cmd[0]) >= 2
+  if name->s:IsCommand("python", 2)
     return s:PromptShowError("No python support yet!")
-  elseif stridx("!", cmd[0]) == 0 || (stridx("shell", cmd[0]) == 0 && len(cmd[0]) >= 3)
+  elseif name[0] == "!" || name->s:IsCommand("shell", 3)
     return s:PromptShowError("No shell support yet!")
-  elseif stridx("edit", cmd[0]) == 0 && len(cmd[0]) >= 2
+  elseif name->s:IsCommand("edit", 2)
     return s:PromptShowError("No edit support (ever)!")
   endif
 
   " Custom commands
-  if cmd[0] == "hostname" && len(cmd[0]) >= 4
+  if name == "hostname" && len(name) >= 4
     return s:HostnameCommand()
-  elseif cmd[0] == "whoami" && len(cmd[0]) >= 3
+  elseif name == "whoami" && len(name) >= 3
     return s:WhoamiCommand()
-  elseif cmd[0] == "qfsave"
+  elseif name == "qfsave"
     return s:QfSaveCommand()
-  elseif cmd[0] == "qfsource"
+  elseif name == "qfsource"
     return s:QfSourceCommand()
   endif
 
   " Overriding GDB commands
   if exists('g:termdebug_override_finish_and_return') && g:termdebug_override_finish_and_return
-    if stridx("finish", cmd[0]) == 0 && len(cmd[0]) >= 3
+    if name->s:IsCommand("finish", 3)
       return s:FinishCommand()
-    elseif stridx("return", cmd[0]) == 0 && len(cmd[0]) >= 3
+    elseif name->s:IsCommand("return", 3)
       return s:ReturnCommand()
     endif
   endif
   if exists("g:termdebug_override_up_and_down") && g:termdebug_override_up_and_down
-    if cmd[0] == "up"
+    if name == "up"
       return s:UpCommand()
-    elseif cmd[0] == "down"
+    elseif name == "down"
       return s:DownCommand()
     endif
   endif
   if exists("g:termdebug_override_s_and_n") && g:termdebug_override_s_and_n
-    if cmd[0] == "asm"
+    if name == "asm"
       return s:AsmCommand()
-    elseif cmd[0] == "si" || cmd[0] == "stepi"
+    elseif name == "si" || name == "stepi"
       call TermDebugSetAsmMode(1)
       return s:SendMICommandNoOutput('-exec-step-instruction')
-    elseif cmd[0] == "ni" || cmd[0] == "nexti"
+    elseif name == "ni" || name == "nexti"
       call TermDebugSetAsmMode(1)
       return s:SendMICommandNoOutput('-exec-next-instruction')
-    elseif cmd[0] == "s" || cmd[0] == "step"
+    elseif name == "s" || name == "step"
       call TermDebugSetAsmMode(0)
       return s:SendMICommandNoOutput('-exec-step')
-    elseif cmd[0] == "n" || cmd[0] == "next"
+    elseif name == "n" || name == "next"
       call TermDebugSetAsmMode(0)
       return s:SendMICommandNoOutput('-exec-next')
     endif
   endif
   if exists("g:termdebug_override_p") && g:termdebug_override_p
-    if cmd[0] == "p" || cmd[0] == "print"
-      return s:PrintCommand(join(cmd[1:], " "))
+    if name == "p" || name == "print"
+      return s:PrintCommand(args)
     endif
   endif
   if exists("g:termdebug_override_f_and_bt") && g:termdebug_override_f_and_bt
-    if stridx("frame", cmd[0]) == 0 && len(cmd[0]) >= 1
-      return s:FrameCommand(join(cmd[1:], " "))
-    elseif (stridx("backtrace", cmd[0]) == 0 && len(cmd[0]) >= 1) || cmd[0] == "bt"
-      return s:BacktraceCommand(join(cmd[1:], " "))
+    if name->s:IsCommand("frame", 1)
+      return s:FrameCommand(args)
+    elseif name == "bt" || name->s:IsCommand("backtrace", 1)
+      return s:BacktraceCommand(args)
     endif
+  endif
+
+  " Good 'ol GDB commands
+  let cmd_console = '-interpreter-exec console ' . s:EscapeMIArgument(a:cmd)
+  if name->s:IsCommand("condition", 4) || name->s:IsCommand("delete", 1) ||
+        \ name->s:IsCommand("disable", 3) || name->s:IsCommand("enable", 2) ||
+        \ name->s:IsCommand("break", 2) || name->s:IsCommand("tbreak", 2) ||
+        \ name->s:IsCommand("awatch", 2) || name->s:IsCommand("rwatch", 2) ||
+        \ name->s:IsCommand("watch", 2)
+    return s:SendMICommandNoOutput(cmd_console)
   endif
 
   " Open new float window
@@ -656,8 +672,7 @@ func s:PromptOutput(cmd)
     autocmd! WinClosed * call s:CloseFloatEdit()
   augroup END
   " Run command and redirect output to the window
-  let msg = '-interpreter-exec console ' . s:EscapeMIArgument(a:cmd)
-  call s:SendMICommandNoOutput(msg)
+  call s:SendMICommandNoOutput(cmd_console)
 endfunc
 
 func s:CommandsCommand(cmd)
@@ -1207,15 +1222,15 @@ func s:HandleNewBreakpoint(dict)
     return
   endif
 
-  if has_key(bkpt, 'pending') && has_key(bkpt, 'number')
+  if has_key(bkpt, 'pending')
     echomsg 'Breakpoint ' . bkpt['number'] . ' (' . bkpt['pending']  . ') pending.'
     return
   endif
 
+  call s:ClearMultiBreakpointSigns(bkpt['number'], 0)
   if has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
     for location in bkpt['locations']
       let id = location['number']
-      call s:ClearBreakpointSign(id)
       let s:breakpoints[id] = #{
             \ fullname: get(location, 'fullname', location['addr']),
             \ lnum: get(location, 'line', 1),
@@ -1226,7 +1241,6 @@ func s:HandleNewBreakpoint(dict)
     endfor
   else
     let id = bkpt['number']
-    call s:ClearBreakpointSign(id)
     let s:breakpoints[id] = #{
           \ fullname: get(bkpt, 'fullname', bkpt['addr']),
           \ lnum: get(bkpt, 'line', 1),
@@ -1240,11 +1254,10 @@ endfunc
 " Will remove the sign that shows the breakpoint
 func s:HandleBreakpointDelete(dict)
   let id = a:dict['id']
-  call s:ClearBreakpointSign(id)
-  call s:ClearMultiBreakpointSigns(id)
+  call s:ClearMultiBreakpointSigns(id, 1)
 endfunc
 
-func s:ClearBreakpointSign(id)
+func s:ClearBreakpointSign(id, was_deleted)
   " Might be watchpoint that was deleted, so check first
   if has_key(s:breakpoints, a:id)
     let breakpoint = s:breakpoints[a:id]
@@ -1256,15 +1269,19 @@ func s:ClearBreakpointSign(id)
         call nvim_buf_del_extmark(bufnr, ns, extmark)
       endif
     endif
-    unlet s:breakpoints[a:id]
+    if a:was_deleted
+      unlet s:breakpoints[a:id]
+    endif
   endif
 endfunc
 
-func s:ClearMultiBreakpointSigns(id)
+func s:ClearMultiBreakpointSigns(id, was_deleted)
   let brks = filter(copy(s:breakpoints), 'has_key(v:val, "parent") && v:val.parent == a:id')
   for id in keys(brks)
-    call s:ClearBreakpointSign(id)
+    call s:ClearBreakpointSign(id, a:was_deleted)
   endfor
+  " In case it wasn't a multi breakpoint
+  call s:ClearBreakpointSign(a:id, a:was_deleted)
 endfunc
 
 func s:PlaceBreakpointSign(id)
@@ -1944,7 +1961,7 @@ func s:EndTermDebug(job_id, exit_code, event)
   " Clear signs
   call s:ClearCursorSign()
   for id in keys(s:breakpoints)
-    call s:ClearBreakpointSign(id)
+    call s:ClearBreakpointSign(id, 0)
   endfor
 
   " Clear buffers
