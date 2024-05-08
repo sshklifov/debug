@@ -1670,10 +1670,11 @@ endfunc
 
 func s:HandleFrameJump(level, dict)
   let frame = a:dict['frame']
-  let s:selected_frame = a:level
   call s:ShowFrame(frame)
   call s:ClearCursorSign()
   call s:PlaceCursorSign(a:dict)
+  let s:selected_frame = a:level
+  call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
 endfunc
 
 func s:HandleFrameList(dict)
@@ -1695,9 +1696,10 @@ func s:HandleFrameChange(going_up, dict)
   for frame in frames
     let fullname = s:Get('', frame, 'fullname')
     if filereadable(fullname) && stridx(fullname, prefix) == 0
-      let s:selected_frame = frame['level']
       call s:ClearCursorSign()
       call s:PlaceCursorSign(#{frame: frame})
+      let s:selected_frame = frame['level']
+      call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
       return
     endif
   endfor
