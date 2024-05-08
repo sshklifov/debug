@@ -307,6 +307,13 @@ func s:LaunchGdb()
   call prompt_setprompt(bufnr(), '(gdb) ')
   call prompt_setcallback(bufnr(), function('s:PromptOutput'))
 
+  " Add a few introductory lines
+  if exists('s:host')
+    call s:PromptShowNormal("Remote debugging " .. s:host)
+  else
+    call s:PromptShowNormal("Local debugging")
+  endif
+
   augroup TermDebug
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
   augroup END
@@ -601,11 +608,7 @@ func s:PromptOutput(cmd)
   endif
 
   " Custom commands
-  if name == "hostname" && len(name) >= 4
-    return s:HostnameCommand()
-  elseif name == "whoami" && len(name) >= 3
-    return s:WhoamiCommand()
-  elseif name == "qfsave"
+  if name == "qfsave"
     return s:QfSaveCommand()
   elseif name == "qfsource"
     return s:QfSourceCommand()
@@ -705,27 +708,6 @@ func s:CommandsOutput(cmd)
     call add(s:prompt_commands, s:EscapeMIArgument(a:cmd))
   endif
   return
-endfunc
-
-func s:HostnameCommand()
-  if exists('s:host')
-    call s:PromptShowNormal("Remote debugging " .. s:host)
-  else
-    call s:PromptShowNormal("Local debugging")
-  endif
-endfunc
-
-func s:WhoamiCommand()
-  if s:pid <= 0
-    call s:PromptShowError("No inferior running.")
-  else
-    let cmd = ['stat', '--printf=%G', '/proc/' . s:pid]
-    if exists('s:host')
-      let cmd = ["ssh", s:host, join(cmd, ' ')]
-    endif
-    let user = system(cmd)
-    call s:PromptShowNormal("User of inferior process: " .. user)
-  endif
 endfunc
 
 func s:QfSourceCommand()
@@ -834,29 +816,34 @@ endfunc
 
 func s:PromptShowSourceLine()
   let lnum = line('.')
-  let line = getline(lnum)
+  let source_line = getline(lnum)
+  let leading_spaces = len(matchstr(source_line, '^\s*'))
+  let number_prefix = printf("%d\t", lnum)
   " Copy source line with syntax
   let text = ""
   let text_hl = ""
-  let items = []
-  for i in range(len(line))
-    let hl = synID(lnum, i+1, 1)->synIDattr("name")
+  let items = [[number_prefix, "Number"]]
+  for idx in range(leading_spaces, len(source_line) - 1)
+    let hl = synID(lnum, idx + 1, 1)->synIDattr("name")
     if hl == text_hl
-      let text ..= line[i]
+      let text ..= source_line[idx]
     else
       call add(items, [text, text_hl])
-      let text = line[i]
+      let text = source_line[idx]
       let text_hl = hl
     endif
   endfor
   call add(items, [text, text_hl])
   call s:PromptShowMessage(items)
+
+  const col_max = len(join(map(items, "v:val[0]"), ""))
+  const col_reshift = len(number_prefix) - leading_spaces
   " Apply extmarks to prompt line
-  let extmarks = nvim_buf_get_extmarks(0, -1, [lnum - 1, 0], [lnum - 1, len(line)], #{details: v:true})
+  let extmarks = nvim_buf_get_extmarks(0, -1, [lnum - 1, 0], [lnum - 1, len(source_line)], #{details: v:true})
   let ns = nvim_create_namespace('TermDebugHighlight')
   let prompt_lnum = nvim_buf_line_count(s:prompt_bufnr) - 2
   for extm in extmarks
-    let start_col = extm[2]
+    let start_col = extm[2] + col_reshift
     let opts = extm[3]
     " Ignore breakpoint signs
     if has_key(opts, 'sign_text')
@@ -868,8 +855,8 @@ func s:PromptShowSourceLine()
       continue
     endif
     silent! unlet opts['end_row']
-    if has_key(opts, 'end_col') && opts['end_col'] > len(line)
-      let opts['end_col'] = len(line)
+    if has_key(opts, 'end_col')
+      let opts['end_col'] = min([opts['end_col'] + col_reshift, col_max])
     endif
     silent! unlet opts['ns_id']
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, prompt_lnum, start_col, opts)
@@ -1207,6 +1194,17 @@ endfunc
 func s:HandleProgramRun(dict)
   if has_key(a:dict, 'pid')
     let s:pid = a:dict['pid']
+
+    " Add some logs
+    call s:PromptShowNormal("Process id: " .. s:pid)
+    let cmd = ['stat', '--printf=%G', '/proc/' . s:pid]
+    if exists('s:host')
+      let cmd = ["ssh", s:host, join(cmd, ' ')]
+    endif
+    let user = system(cmd)
+    call s:PromptShowNormal("Running as: " .. user)
+
+    " Issue autocmds
     if exists('#User#TermDebugRunPost') && !exists('s:program_run_once')
       doauto <nomodeline> User TermDebugRunPost
       let s:program_run_once = v:true
