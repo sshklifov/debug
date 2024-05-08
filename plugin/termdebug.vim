@@ -200,6 +200,10 @@ endfunc
 """"""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""""{{{
 let s:command_hist = []
 
+func s:OptionSet(name)
+  return get(g:, a:name, v:false)
+endfunc
+
 func TermDebugStart(...)
   if TermDebugIsOpen()
     echo 'Terminal debugger already running, cannot run two'
@@ -554,8 +558,7 @@ func s:EnterMap()
       let cmd = get(s:command_hist, -1, "")
       call s:PromptOutput(cmd)
     endif
-    let silent = exists('g:termdebug_silent_rerun') && g:termdebug_silent_rerun
-    return silent ? "" : "\n"
+    return s:OptionSet('termdebug_silent_rerun') ? "" : "\n"
   endif
 endfunc
 
@@ -616,21 +619,21 @@ func s:PromptOutput(cmd)
   endif
 
   " Overriding GDB commands
-  if exists('g:termdebug_override_finish_and_return') && g:termdebug_override_finish_and_return
+  if s:OptionSet('termdebug_override_finish_and_return')
     if name->s:IsCommand("finish", 3)
       return s:FinishCommand()
     elseif name->s:IsCommand("return", 3)
       return s:ReturnCommand()
     endif
   endif
-  if exists("g:termdebug_override_up_and_down") && g:termdebug_override_up_and_down
+  if s:OptionSet('termdebug_override_up_and_down')
     if name == "up"
       return s:UpCommand()
     elseif name == "down"
       return s:DownCommand()
     endif
   endif
-  if exists("g:termdebug_override_s_and_n") && g:termdebug_override_s_and_n
+  if s:OptionSet('termdebug_override_s_and_n')
     if name == "asm"
       return s:AsmCommand()
     elseif name == "si" || name == "stepi"
@@ -647,12 +650,12 @@ func s:PromptOutput(cmd)
       return s:SendMICommandNoOutput('-exec-next')
     endif
   endif
-  if exists("g:termdebug_override_p") && g:termdebug_override_p
+  if s:OptionSet('termdebug_override_p')
     if name == "p" || name == "print"
       return s:PrintCommand(args)
     endif
   endif
-  if exists("g:termdebug_override_f_and_bt") && g:termdebug_override_f_and_bt
+  if s:OptionSet('termdebug_override_f_and_bt')
     if name->s:IsCommand("frame", 1)
       return s:FrameCommand(args)
     elseif name == "bt" || name->s:IsCommand("backtrace", 1)
@@ -672,7 +675,7 @@ func s:PromptOutput(cmd)
   endif
 
   " Open new float window
-  if exists('g:termdebug_floating_output') && g:termdebug_floating_output
+  if s:OptionSet('termdebug_floating_output')
     call s:OpenFloatEdit(20, 1, [])
     augroup TermDebugFloatEdit
       autocmd! WinClosed * call s:CloseFloatEdit()
@@ -798,7 +801,9 @@ func s:PromptPlaceMessage(where, msg)
   for [msg, hl_group] in a:msg
     let start_col = end_col
     let end_col = start_col + len(msg)
-    call nvim_buf_set_extmark(s:prompt_bufnr, ns, lnum, start_col, #{end_col: end_col, hl_group: hl_group})
+    if end_col > start_col
+      call nvim_buf_set_extmark(s:prompt_bufnr, ns, lnum, start_col, #{end_col: end_col, hl_group: hl_group})
+    endif
   endfor
 endfunc
 
@@ -1166,13 +1171,15 @@ func s:PlaceSourceCursor(dict)
     exe lnum
     normal z.
     " Display a hint where we stopped
-    if exists('g:termdebug_show_source') && g:termdebug_show_source
+    if s:OptionSet('termdebug_show_source')
       call s:PromptShowSourceLine()
     endif
     " Highlight stopped line
     call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
     let s:pcbuf = bufnr()
     call win_gotoid(origw)
+  else
+    call s:PromptShowNormal("???\tNo source available.")
   endif
 endfunc
 
