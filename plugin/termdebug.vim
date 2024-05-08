@@ -651,7 +651,7 @@ func s:PromptOutput(cmd)
   endif
 
   " Open new float window
-  call s:OpenFloatEdit(80, 20, [])
+  call s:OpenFloatEdit(20, 1, [])
   augroup TermDebugCommands
     autocmd! WinClosed * call s:CloseFloatEdit()
   augroup END
@@ -1080,6 +1080,9 @@ func s:HandleStream(msg)
     let last_line = getbufline(bufnr, '$')[0] .. lines[0]
     call setbufline(bufnr, '$', last_line)
     call appendbufline(bufnr, '$', lines[1:])
+    " Resize float window
+    let widths = map(getbufline(bufnr, 1, '$'), 'len(v:val)')
+    call s:OpenFloatEdit(max(widths), len(widths))
   endif
 endfunc
 
@@ -1754,14 +1757,20 @@ func s:WinAbsoluteLine()
   return result[0] ? result[1] : 0
 endfunc
 
-func s:OpenFloatEdit(width, height, lines)
-  if exists('s:edit_win')
-    throw s:float_edit_exception
+func s:OpenFloatEdit(width, height, ...)
+  if &lines > a:height
+    let row = (&lines - a:height) / 2
+  else
+    let row = 0
   endif
-  let row = (nvim_win_get_height(0) - a:height) / 2
-  let col = (nvim_win_get_width(0) - a:width) / 2
+  if &columns > a:width
+    let col = (&columns - a:width) / 2
+  else
+    let col = 0
+  endif
+
   let opts = #{
-        \ relative: "win",
+        \ relative: "editor",
         \ row: row,
         \ col: col,
         \ width: a:width,
@@ -1769,14 +1778,22 @@ func s:OpenFloatEdit(width, height, lines)
         \ focusable: 1,
         \ style: "minimal",
         \ border: "single",
-        \ noautocmd: 1
         \ }
 
-  let nr = nvim_create_buf(0, 0)
-  call nvim_buf_set_option(nr, "buftype", "nofile")
-  call setbufline(nr, 1, a:lines)
-  let s:edit_win = nvim_open_win(nr, v:true, opts)
+  if exists("s:edit_win")
+    let nr = nvim_win_get_buf(s:edit_win)
+    call nvim_win_set_config(s:edit_win, opts)
+  else
+    let nr = nvim_create_buf(0, 0)
+    call nvim_buf_set_option(nr, "buftype", "nofile")
+    let opts['noautocmd'] = 1
+    let s:edit_win = nvim_open_win(nr, v:true, opts)
+  endif
+
   call nvim_win_set_option(s:edit_win, 'wrap', v:false)
+  if a:0 >= 1
+    call setbufline(nr, 1, a:1)
+  endif
   return s:edit_win
 endfunc
 
