@@ -14,6 +14,12 @@ endif
 hi default link debugPC CursorLine
 hi default debugBreakpoint gui=reverse guibg=red
 hi default debugBreakpointDisabled gui=reverse guibg=gray
+hi default link debugFrameFunction markdownLinkText
+hi default link debugFrameLocation Normal
+hi default link debugJumpSource markdownLinkText
+hi default link debugJumpFrame Italic
+hi default link debugExpandValue markdownLinkText
+hi default link debugPrintValue markdownCode
 
 """"""""""""""""""""""""""""""""Go to"""""""""""""""""""""""""""""""""""""""""{{{
 func TermDebugGoToPC()
@@ -787,14 +793,12 @@ endfunc
 
 func s:PromptShowMessage(msg)
   let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
-  call s:PromptPlaceMessage(lnum, a:msg)
+  call s:PromptAppendMessage(lnum, a:msg)
 endfunc
 
-" 1-based indexing
-func s:PromptPlaceMessage(where, msg)
-  let lnum = a:where
+func s:PromptAppendMessage(lnum, msg)
   let line = join(map(copy(a:msg), "v:val[0]"), '')
-  call appendbufline(s:prompt_bufnr, lnum, line)
+  call appendbufline(s:prompt_bufnr, a:lnum, line)
 
   let ns = nvim_create_namespace('TermDebugHighlight')
   let end_col = 0
@@ -802,7 +806,8 @@ func s:PromptPlaceMessage(where, msg)
     let start_col = end_col
     let end_col = start_col + len(msg)
     if end_col > start_col
-      call nvim_buf_set_extmark(s:prompt_bufnr, ns, lnum, start_col, #{end_col: end_col, hl_group: hl_group})
+      let opts = #{end_col: end_col, hl_group: hl_group}
+      call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, start_col, opts)
     endif
   endfor
 endfunc
@@ -823,11 +828,10 @@ func s:PromptShowSourceLine()
   let lnum = line('.')
   let source_line = getline(lnum)
   let leading_spaces = len(matchstr(source_line, '^\s*'))
-  let number_prefix = printf("%d\t", lnum)
   " Copy source line with syntax
   let text = ""
   let text_hl = ""
-  let items = [[number_prefix, "Number"]]
+  let items = [[string(lnum), "debugJumpSource"], ["\t", "Normal"]]
   for idx in range(leading_spaces, len(source_line) - 1)
     let hl = synID(lnum, idx + 1, 1)->synIDattr("name")
     if hl == text_hl
@@ -841,10 +845,10 @@ func s:PromptShowSourceLine()
   call add(items, [text, text_hl])
   call s:PromptShowMessage(items)
 
+  const col_reshift = len(items[0][0]) + len(items[1][0]) - leading_spaces
   const col_max = len(join(map(items, "v:val[0]"), ""))
-  const col_reshift = len(number_prefix) - leading_spaces
   " Apply extmarks to prompt line
-  let extmarks = nvim_buf_get_extmarks(0, -1, [lnum - 1, 0], [lnum - 1, len(source_line)], #{details: v:true})
+  let extmarks = s:GetLineExtmarks(0, -1, lnum - 1)
   let ns = nvim_create_namespace('TermDebugHighlight')
   let prompt_lnum = nvim_buf_line_count(s:prompt_bufnr) - 2
   for extm in extmarks
@@ -866,6 +870,14 @@ func s:PromptShowSourceLine()
     silent! unlet opts['ns_id']
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, prompt_lnum, start_col, opts)
   endfor
+
+  " Mark for jumping
+  call s:MarkCursorJump(expand("%:p"), lnum)
+endfunc
+
+func s:GetLineExtmarks(b, ns, idx)
+  let line = nvim_buf_get_lines(a:b, a:idx, a:idx + 1, v:true)[0]
+  return nvim_buf_get_extmarks(a:b, a:ns, [a:idx, 0], [a:idx, len(line)], #{details: v:true})
 endfunc
 " }}}
 
@@ -903,16 +915,16 @@ func s:ShowElided(lnum, var)
   let value = is_pretty ? "<...>" : a:var["value"]
   let indent_item = [indent, "Normal"]
   let name_item = [uiname .. " = ", "Normal"]
-  let value_item = [value, "markdownCode"]
-  call s:PromptPlaceMessage(a:lnum, [indent_item, name_item, value_item])
+  let value_item = [value, "debugPrintValue"]
+  call s:PromptAppendMessage(a:lnum, [indent_item, name_item, value_item])
 
   if is_pretty || a:var['numchild'] > 0
     " Mark the variable
     let key = (is_pretty ? string(pretty_idx) : "") .. name
-    let ns = nvim_create_namespace('TermDebugConceal')
+    let ns = nvim_create_namespace('TermDebugConcealVar')
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, 0, #{virt_text: [[key, "EndOfBuffer"]]})
     let col = len(indent_item[0]) + len(name_item[0])
-    let opts = #{end_col: col + len(value_item[0]), hl_group: 'markdownLinkText', priority: 10000}
+    let opts = #{end_col: col + len(value_item[0]), hl_group: 'debugExpandValue', priority: 10000}
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, col, opts)
   endif
 endfunc
@@ -929,31 +941,62 @@ func s:GetVariableIndent(varname, ...)
   return repeat(" ", level * width)
 endfunc
 
+" Perform an action based on a hidden string message at line
+" - If the mark starts with an alpha character, the mark is a name of a variable that
+" should be expanded.
+" - Instead, it will start with digits followed by a non-digit character. If this is '/',
+" then the mark is a location (filename + line number) that will be jumped to
+" - Otherwise, the mark is a name of a variable that should be pretty printed. The leading
+" number signifies the index of the pretty printer
 func s:ExpandCursor(lnum)
-  let lnum = a:lnum - 1
-  " Index into created marks
-  let ns = nvim_create_namespace('TermDebugConceal')
-  let extmarks = nvim_buf_get_extmarks(0, ns, [lnum, 0], [lnum + 1, 0], #{details: 1})
-  if len(extmarks) < 2
+  if s:JumpCursor(a:lnum)
     return
   endif
-  " Get the variable name from first mark
-  let index = has_key(extmarks[0][3], 'virt_text') ? 0 : 1
-  let opts = extmarks[index][3]
-  let key = opts['virt_text'][0][0]
-  " Remove highlights to signal that the link is inactive
-  call nvim_buf_del_extmark(0, ns, extmarks[0][0])
-  call nvim_buf_del_extmark(0, ns, extmarks[1][0])
-  " Load children of variable
-  if key[0] =~ '[0-9]'
-    let idx = str2nr(key)
-    let Cb = function(s:pretty_printers[idx][1])
-    let name = key[len(idx):]
-    return s:ShowPrettyVar(a:lnum, name, Cb)
-  else
-    let Cb = function('s:CollectVarChildren', [lnum + 1])
-    call TermDebugSendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(key), Cb)
+  " Index into created marks
+  let ns = nvim_create_namespace('TermDebugConcealVar')
+  let extmarks = s:GetLineExtmarks(0, ns, a:lnum - 1)
+  let var_extmark = filter(copy(extmarks), 'has_key(v:val[3], "virt_text")')
+  if empty(var_extmark)
+    return
   endif
+  let key = var_extmark[0][3]['virt_text'][0][0]
+  " Remove highlights to signal that the link is inactive
+  call map(extmarks, 'nvim_buf_del_extmark(0, ns, v:val[0])')
+  " Perform action based on key
+  if key[0] =~ '[0-9]'
+    let pretty_idx = str2nr(key)
+    let varname = key[len(pretty_idx):]
+    return s:ShowPrettyVar(a:lnum, varname, function(s:pretty_printers[pretty_idx][1]))
+  else
+    let Cb = function('s:CollectVarChildren', [a:lnum])
+    return TermDebugSendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(key), Cb)
+  endif
+endfunc
+
+func s:JumpCursor(lnum)
+  " Index into created marks
+  let ns = nvim_create_namespace('TermDebugConcealJump')
+  let extmarks = s:GetLineExtmarks(0, ns, a:lnum - 1)
+  if empty(extmarks)
+    return v:false
+  endif
+  let key = extmarks[0][3]['virt_text'][0][0]
+  let jump_pos = str2nr(key)
+  let jump_file = key[len(jump_pos):]
+  call TermDebugGoToSource()
+  if expand("%:p") != jump_file
+    exe "e " . fnameescape(jump_file)
+  endif
+  exe jump_pos
+  normal z.
+  return v:true
+endfunc
+
+func s:MarkCursorJump(jump_file, jump_pos)
+  let key = a:jump_pos .. a:jump_file
+  let ns = nvim_create_namespace('TermDebugConcealJump')
+  let idx = nvim_buf_line_count(s:prompt_bufnr) - 2
+  call nvim_buf_set_extmark(s:prompt_bufnr, ns, idx, 0, #{virt_text: [[key, "EndOfBuffer"]]})
 endfunc
 
 func s:CollectVarChildren(lnum, dict)
@@ -993,14 +1036,14 @@ func s:ShowPrettyVarResolved(lnum, indent, PrettyPrinter, resolved)
       let Cb = function('s:ShowPrettyField', [a:lnum, prefix])
       call TermDebugSendMICommand('-data-evaluate-expression ' . s:EscapeMIArgument(expr), Cb)
     else
-      call s:PromptPlaceMessage(a:lnum, [[a:indent .. "Recursive fields are TODO", "ErrorMsg"]])
+      call s:PromptAppendMessage(a:lnum, [[a:indent .. "Recursive fields are TODO", "ErrorMsg"]])
     endif
   endfor
 endfunc
 
 func s:ShowPrettyField(lnum, prefix, dict)
   let value = a:dict['value']
-  call s:PromptPlaceMessage(a:lnum, [[a:prefix, 'Normal'], [value, 'markdownCode']])
+  call s:PromptAppendMessage(a:lnum, [[a:prefix, 'Normal'], [value, 'debugPrintValue']])
 endfunc
 
 func TermDebugPrettyPrinter(regex, func)
@@ -1024,7 +1067,7 @@ func s:EndPrinting()
     call s:SendMICommandNoOutput('-var-delete ' . varname)
   endfor
   let s:vars = []
-  let ns = nvim_create_namespace('TermDebugConceal')
+  let ns = nvim_create_namespace('TermDebugConcealVar')
   call nvim_buf_clear_namespace(0, ns, 0, -1)
 endfunc
 "}}}
@@ -1130,23 +1173,28 @@ endfunc
 func s:ShowStopReason(dict)
   let reason = a:dict['reason']
   if reason == 'breakpoint-hit'
-    call s:PromptShowNormal("Breakpoint hit")
+    let msg = "Breakpoint hit."
   elseif reason == 'watchpoint-scope'
-    call s:PromptShowError("Watchpoint out of scope!")
+    let msg = "Watchpoint out of scope!"
   elseif reason == 'no-history'
-    call s:PromptShowError("Cannot continue reverse execution!")
+    let msg = "Cannot continue reverse execution!"
   elseif reason =~ 'watchpoint'
-    call s:PromptShowNormal("Watchpoint hit")
+    let msg = "Watchpoint hit"
   elseif reason == 'exited-signalled'
-    call s:PromptShowWarning("Process exited due to signal: " .. a:dict['signal-name'])
+    return s:PromptShowWarning("Process exited due to signal: " .. a:dict['signal-name'])
   elseif reason == 'exited'
-    call s:PromptShowWarning("Process exited with code " .. a:dict['exit-code'])
+    return s:PromptShowWarning("Process exited with code " .. a:dict['exit-code'])
   elseif reason == 'exited-normally'
-    call s:PromptShowNormal("Process exited normally. ")
+    return s:PromptShowNormal("Process exited normally. ")
   elseif reason == 'signal-received'
-    call s:PromptShowNormal("Process received signal: " .. a:dict['signal-name'])
+    return s:PromptShowNormal("Process received signal: " .. a:dict['signal-name'])
   elseif reason == 'solib-event' || reason =~ 'fork' || reason =~ 'syscall' || reason == 'exec'
-    call s:PromptShowNormal("Stopped due to event: " .. reason)
+    let msg = "Event " .. string(reason)
+  endif
+
+  if exists('msg')
+    let items = [["Stopped", "Italic"], [", reason: " .. msg, "Normal"]]
+    call s:PromptShowMessage(items)
   endif
 endfunc
 
@@ -1235,6 +1283,8 @@ func s:HandleProgramRun(dict)
     endif
     let user = system(cmd)
     call s:PromptShowNormal("Running as: " .. user)
+    " This makes a huge difference visually
+    call s:PromptShowNormal("")
 
     " Issue autocmds
     if exists('#User#TermDebugRunPost') && !exists('s:program_run_once')
@@ -1658,26 +1708,27 @@ func s:HandleDisassemble(addr, dict)
   call s:SelectAsmAddr(a:addr)
 endfunc
 
-" TODO idea place markdown links everywhere :)))
 func s:ShowFrame(dict)
   let frame = a:dict
   let location = "???"
   if has_key(frame, 'file')
-    let location = printf("%s:%d", frame['file'], frame['line'])
+    let location = fnamemodify(frame['file'], ":t")
   endif
   let where = has_key(frame, 'func') ? frame['func'] : frame['addr']
 
-  let level_item = ["#" .. frame['level'], 'markdownH2']
+  let level_item = ["#" .. frame['level'], 'debugJumpFrame']
   let in_item = [" in ", 'Normal']
-  let where_item = [where, 'markdownH5']
+  let where_item = [where, 'debugFrameFunction']
   let at_item = [" at ", 'Normal']
-  let loc_item = [location, 'Normal']
+  let loc_item = [location, 'debugFrameLocation']
   call s:PromptShowMessage([level_item, in_item, where_item, at_item, loc_item])
+  if has_key(frame, 'file')
+    call s:MarkCursorJump(frame['file'], frame['line'])
+  endif
 endfunc
 
 func s:HandleFrameJump(level, dict)
   let frame = a:dict['frame']
-  call s:ShowFrame(frame)
   call s:ClearCursorSign()
   call s:PlaceCursorSign(a:dict)
   let s:selected_frame = a:level
@@ -1703,6 +1754,7 @@ func s:HandleFrameChange(going_up, dict)
   for frame in frames
     let fullname = s:Get('', frame, 'fullname')
     if filereadable(fullname) && stridx(fullname, prefix) == 0
+      call s:PromptShowMessage([["Switching to frame #" .. frame['level'], "Normal"]])
       call s:ClearCursorSign()
       call s:PlaceCursorSign(#{frame: frame})
       let s:selected_frame = frame['level']
