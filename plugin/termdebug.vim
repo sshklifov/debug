@@ -161,7 +161,7 @@ func TermDebugSetAsmMode(asm_mode)
     let s:asm_mode = a:asm_mode
     call s:ClearCursorSign()
     let cmd = printf('-stack-info-frame --thread %d --frame %d', s:selected_thread, s:selected_frame)
-    call TermDebugSendMICommand(cmd, function('s:PlaceCursorSign'))
+    call TermDebugSendMICommand(cmd, {dict -> s:PlaceCursorSign(dict['frame'])})
   endif
 endfunc
 " }}}
@@ -668,6 +668,11 @@ func s:PromptOutput(cmd)
       return s:BacktraceCommand(args)
     endif
   endif
+  if s:OptionSet('termdebug_override_t')
+    if name->s:IsCommand("thread", 1)
+      return s:ThreadCommand(args)
+    endif
+  endif
 
   " Good 'ol GDB commands
   let cmd_console = '-interpreter-exec console ' . s:EscapeMIArgument(a:cmd)
@@ -789,6 +794,11 @@ func s:BacktraceCommand(max_levels)
   else
     call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameList'))
   endif
+endfunc
+
+func s:ThreadCommand(id)
+  let Cb = function('s:HandleThreadSelect')
+  call TermDebugSendMICommand('-thread-select ' .. s:EscapeMIArgument(a:id), Cb)
 endfunc
 
 func s:PromptShowMessage(msg)
@@ -1156,7 +1166,7 @@ func s:HandleCursor(class, dict)
       let s:stopped = 0
     endif
   endif
-  " Update prompt
+  " Gray out '(gdb)' prompt if running
   let ns = nvim_create_namespace('TermDebugPrompt')
   call nvim_buf_clear_namespace(s:prompt_bufnr, ns, 0, -1)
   if !s:stopped
@@ -1166,7 +1176,7 @@ func s:HandleCursor(class, dict)
   " Update cursor
   call s:ClearCursorSign()
   if s:stopped
-    call s:PlaceCursorSign(a:dict)
+    call s:PlaceCursorSign(a:dict['frame'])
   endif
 endfunc
 
@@ -1208,8 +1218,8 @@ endfunc
 
 func s:PlaceSourceCursor(dict)
   let ns = nvim_create_namespace('TermDebugPC')
-  let filename = s:Get('', a:dict, 'frame', 'fullname')
-  let lnum = s:Get('', a:dict, 'frame', 'line')
+  let filename = s:Get('', a:dict, 'fullname')
+  let lnum = s:Get('', a:dict, 'line')
   if filereadable(filename) && str2nr(lnum) > 0
     let origw = win_getid()
     call TermDebugGoToSource()
@@ -1232,7 +1242,7 @@ func s:PlaceSourceCursor(dict)
 endfunc
 
 func s:PlaceAsmCursor(dict)
-  let addr = s:Get('', a:dict, 'frame', 'addr')
+  let addr = s:Get('', a:dict, 'addr')
   if !s:SelectAsmAddr(addr)
     " Reload disassembly
     let cmd = printf("-data-disassemble -a %s 0", addr)
@@ -1578,6 +1588,12 @@ endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Result handles""""""""""""""""""""""""""""""""{{{
+func s:HandleThreadSelect(dict)
+  let s:selected_thread = a:dict['new-thread-id']
+  call s:ClearCursorSign()
+  call s:PlaceCursorSign(a:dict['frame'])
+endfunc
+
 func s:HandleBreakpointEdit(bp, dict)
   let script = s:Get([], a:dict, 'BreakpointTable', 'body', 'bkpt', 'script')
   if !empty(script) && bufname() == s:prompt_bufname
@@ -1714,15 +1730,15 @@ func s:ShowFrame(dict)
   if has_key(frame, 'file')
     let location = fnamemodify(frame['file'], ":t")
   endif
-  let where = has_key(frame, 'func') ? frame['func'] : frame['addr']
-
   let level_item = ["#" .. frame['level'], 'debugJumpFrame']
   let in_item = [" in ", 'Normal']
-  let where_item = [where, 'debugFrameFunction']
+  let func_item = [frame["func"], 'debugFrameFunction']
+  let addr_item = [frame["addr"], 'Normal']
   let at_item = [" at ", 'Normal']
   let loc_item = [location, 'debugFrameLocation']
+  let where_item = (func_item[0] == "??" ? addr_item : func_item)
   call s:PromptShowMessage([level_item, in_item, where_item, at_item, loc_item])
-  if has_key(frame, 'file')
+  if has_key(frame, 'file') && filereadable(frame['file'])
     call s:MarkCursorJump(frame['file'], frame['line'])
   endif
 endfunc
@@ -1730,7 +1746,7 @@ endfunc
 func s:HandleFrameJump(level, dict)
   let frame = a:dict['frame']
   call s:ClearCursorSign()
-  call s:PlaceCursorSign(a:dict)
+  call s:PlaceCursorSign(frame)
   let s:selected_frame = a:level
   call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
 endfunc
@@ -1756,7 +1772,7 @@ func s:HandleFrameChange(going_up, dict)
     if filereadable(fullname) && stridx(fullname, prefix) == 0
       call s:PromptShowMessage([["Switching to frame #" .. frame['level'], "Normal"]])
       call s:ClearCursorSign()
-      call s:PlaceCursorSign(#{frame: frame})
+      call s:PlaceCursorSign(frame)
       let s:selected_frame = frame['level']
       call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
       return
