@@ -191,31 +191,6 @@ func TermDebugEvaluate(what)
   let Cb = function('s:HandleEvaluate', [win_getid()])
   call TermDebugSendMICommand(cmd, Cb)
 endfunc
-
-func TermDebugBacktrace()
-  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleBacktrace'))
-endfunc
-
-func TermDebugThreadInfo(...)
-  let pat = get(a:000, 0, '')
-  let Cb = function('s:HandleThreadList', [function('s:ThreadsToQf', [pat])])
-  call TermDebugSendMICommand('-thread-list-ids', Cb)
-endfunc
-
-func s:ThreadsToQf(pat, threads)
-  let list = []
-  for key in keys(a:threads)
-    for frame in a:threads[key]
-      let fullname = get(frame, 'fullname', '')
-      if filereadable(fullname) && match(fullname, a:pat) >= 0
-        let text = printf('Thread %d at frame %d', key, frame['level'])
-        call add(list, #{text: text, filename: frame['fullname'], lnum: frame['line']})
-      endif
-    endfor
-  endfor
-  call setqflist([], ' ', #{title: 'Threads', items: list})
-  copen
-endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""""{{{
@@ -259,6 +234,7 @@ func TermDebugStart(...)
         \ ['std::string', "s:PrettyPrinterString"],
         \ ]
   let s:vars = []
+  let s:thread_ids = #{}
   let s:breakpoints = #{}
   let s:callbacks = #{}
   let s:pcbuf = -1
@@ -688,8 +664,7 @@ func s:PromptOutput(cmd)
       return s:ThreadCommand(args)
     endif
     if cmd[0]->s:IsCommand("info", 3) && cmd[1]->s:IsCommand("threads", 2)
-      let Cb = function('s:HandleThreadList', [function('s:ShowThreads')])
-      return TermDebugSendMICommand('-thread-list-ids', Cb)
+      return s:InfoThreadsCommand(get(cmd, 2, ''))
     endif
   endif
 
@@ -822,23 +797,40 @@ func s:BacktraceCommand(max_levels)
   endif
 endfunc
 
-func s:ShowThreads(threads)
-  let prefix = "/home/" .. $USER
-  for key in sort(keys(a:threads), "N")
-    for frame in a:threads[key]
-      let fullname = get(frame, 'fullname', '')
-      if filereadable(fullname) && stridx(fullname, prefix) == 0
-        let display_key = "(" .. key .. ")"
-        call s:ShowFrame(frame, display_key)
-        break
-      endif
-    endfor
-  endfor
-endfunc
-
 func s:ThreadCommand(id)
   let Cb = function('s:HandleThreadSelect')
   call TermDebugSendMICommand('-thread-select ' .. s:EscapeMIArgument(a:id), Cb)
+endfunc
+
+func s:InfoThreadsCommand(id)
+  if !empty(a:id)
+    call s:PromptShowError("Command does not accept arguments")
+  else
+    let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
+    let ids = sort(keys(s:thread_ids), 'N')
+    for id in reverse(ids)
+      let Cb = function('s:ShowThread', [lnum, id])
+      call TermDebugSendMICommand('-stack-list-frames --thread ' . id, Cb)
+    endfor
+  endif
+endfunc
+
+func s:ShowThread(lnum, id, dict)
+  let prefix = "/home/" .. $USER
+  let frames = s:GetListWithKeys(a:dict, 'stack')
+  for frame in frames
+    let fullname = get(frame, 'fullname', '')
+    if filereadable(fullname) && stridx(fullname, prefix) == 0
+      let msg = s:FormatFrameMessage(frame)
+      " Display thread id instead of frame id
+      let msg[0][0] = "(" .. a:id .. ")"
+      call s:PromptAppendMessage(a:lnum, msg)
+      if has_key(frame, 'file') && filereadable(frame['file'])
+        call s:MarkCursorJump(frame['file'], frame['line'], a:lnum)
+      endif
+      break
+    endif
+  endfor
 endfunc
 
 func s:PromptShowMessage(msg)
@@ -1042,10 +1034,14 @@ func s:JumpCursor(lnum)
   return v:true
 endfunc
 
-func s:MarkCursorJump(jump_file, jump_pos)
+func s:MarkCursorJump(jump_file, jump_pos, ...)
   let key = a:jump_pos .. a:jump_file
   let ns = nvim_create_namespace('TermDebugConcealJump')
-  let idx = nvim_buf_line_count(s:prompt_bufnr) - 2
+  if a:0 > 0
+    let idx = a:1
+  else
+    let idx = nvim_buf_line_count(s:prompt_bufnr) - 2
+  endif
   call nvim_buf_set_extmark(s:prompt_bufnr, ns, idx, 0, #{virt_text: [[key, "EndOfBuffer"]]})
 endfunc
 
@@ -1143,10 +1139,12 @@ endfunc
 func s:HandleAsync(msg)
   let async = s:GetAsyncClass(a:msg)
   let dict = EvalCommaResults(a:msg)
-  if async == "stopped" || async == "running" || async == "thread-selected"
+  if async == 'stopped' || async == 'running' || async == 'thread-selected'
     return s:HandleCursor(async, dict)
-  elseif async == "thread-group-started"
+  elseif async == 'thread-group-started'
     return s:HandleProgramRun(dict)
+  elseif async == 'thread-created' || async == 'thread-exited'
+    return s:HandleThreadChanged(async, dict)
   elseif async == 'breakpoint-created' || async == 'breakpoint-modified'
     return s:HandleNewBreakpoint(dict)
   elseif async == 'breakpoint-deleted'
@@ -1341,6 +1339,15 @@ func s:HandleProgramRun(dict)
       doauto <nomodeline> User TermDebugRunPost
       let s:program_run_once = v:true
     endif
+  endif
+endfunc
+
+func s:HandleThreadChanged(async, dict)
+  let id = a:dict['id']
+  if a:async == 'thread-created'
+    let s:thread_ids[id] = a:dict['group-id']
+  elseif a:async == 'thread-exited'
+    silent! unlet s:thread_ids[id]
   endif
 endfunc
 
@@ -1766,24 +1773,20 @@ func s:HandleDisassemble(addr, dict)
   call s:SelectAsmAddr(a:addr)
 endfunc
 
-func s:ShowFrame(dict, ...)
+func s:FormatFrameMessage(dict)
   let frame = a:dict
-  let level = (a:0 > 0 ? a:1 : "#" .. frame['level'])
   let location = "???"
   if has_key(frame, 'file')
     let location = fnamemodify(frame['file'], ":t")
   endif
-  let level_item = [level, 'debugFrameTag']
+  let level_item = ["#" .. frame['level'], 'debugFrameTag']
   let in_item = [" in ", 'Normal']
   let func_item = [frame["func"], 'debugFrameFunction']
   let addr_item = [frame["addr"], 'Normal']
   let at_item = [" at ", 'Normal']
   let loc_item = [location, 'debugFrameLocation']
   let where_item = (func_item[0] == "??" ? addr_item : func_item)
-  call s:PromptShowMessage([level_item, in_item, where_item, at_item, loc_item])
-  if has_key(frame, 'file') && filereadable(frame['file'])
-    call s:MarkCursorJump(frame['file'], frame['line'])
-  endif
+  return [level_item, in_item, where_item, at_item, loc_item]
 endfunc
 
 func s:HandleFrameJump(level, dict)
@@ -1797,7 +1800,11 @@ endfunc
 func s:HandleFrameList(dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
-    call s:ShowFrame(frame)
+    let msg = s:FormatFrameMessage(frame)
+    call s:PromptShowMessage(msg)
+    if has_key(frame, 'file') && filereadable(frame['file'])
+      call s:MarkCursorJump(frame['file'], frame['line'])
+    endif
   endfor
 endfunc
 
@@ -1838,44 +1845,6 @@ func s:HandleFrameChange(going_up, dict)
   else
     call s:PromptShowError("At bottom of stack")
   endif
-endfunc
-
-func s:HandleBacktrace(dict)
-  let list = []
-  let frames = s:GetListWithKeys(a:dict, 'stack')
-  for frame in frames
-    let fullname = get(frame, 'fullname', '')
-    if filereadable(fullname)
-      call add(list, #{text: frame['func'], filename: fullname, lnum: frame['line']})
-    endif
-  endfor
-  call TermDebugGoToSource()
-  call setqflist([], ' ', #{title: "Backtrace", items: list})
-  copen
-endfunc
-
-" TODO =thread-created
-func s:HandleThreadList(Cb, dict)
-  let ids = s:GetListWithKeys(a:dict, 'thread-ids')
-  let s:pending_threads = len(ids)
-  let s:collected = #{}
-  for id in ids
-    let Cb = function('s:CollectThreads', [a:Cb, id])
-    call TermDebugSendMICommand('-stack-list-frames --thread ' . id, Cb)
-  endfor
-endfunc
-
-func s:CollectThreads(Cb, id, dict)
-  let frames = s:GetListWithKeys(a:dict, 'stack')
-  let s:collected[a:id] = frames
-  if len(s:collected) != s:pending_threads
-    return
-  endif
-  " Wait for all threads
-
-  call a:Cb(s:collected)
-  unlet s:collected
-  unlet s:pending_threads
 endfunc
 
 func s:HandleError(dict)
