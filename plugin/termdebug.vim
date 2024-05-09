@@ -1802,7 +1802,6 @@ func s:HandleFrameList(dict)
 endfunc
 
 func s:HandleFrameChange(going_up, dict)
-  " TODO does not work with ASM
   let frames = s:GetListWithKeys(a:dict, 'stack')
   if a:going_up
     call filter(frames, "str2nr(v:val.level) > s:selected_frame")
@@ -1810,18 +1809,30 @@ func s:HandleFrameChange(going_up, dict)
     call filter(frames, "str2nr(v:val.level) < s:selected_frame")
     call reverse(frames)
   endif
-  let prefix = "/home/" .. $USER
-  for frame in frames
-    let fullname = s:Get('', frame, 'fullname')
-    if filereadable(fullname) && stridx(fullname, prefix) == 0
-      call s:PromptShowMessage([["Switching to frame #" .. frame['level'], "Normal"]])
+  if s:asm_mode
+    " Switch directly
+    if !empty(frames)
+      call s:PromptShowMessage([["Switching to frame #" .. frames[0]['level'], "Normal"]])
       call s:ClearCursorSign()
-      call s:PlaceCursorSign(frame)
-      let s:selected_frame = frame['level']
+      call s:PlaceCursorSign(frames[0])
+      let s:selected_frame = frames[0]['level']
       call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
       return
     endif
-  endfor
+  else
+    let prefix = "/home/" .. $USER
+    for frame in frames
+      let fullname = s:Get('', frame, 'fullname')
+      if filereadable(fullname) && stridx(fullname, prefix) == 0
+        call s:PromptShowMessage([["Switching to frame #" .. frame['level'], "Normal"]])
+        call s:ClearCursorSign()
+        call s:PlaceCursorSign(frame)
+        let s:selected_frame = frame['level']
+        call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
+        return
+      endif
+    endfor
+  endif
   if a:going_up
     call s:PromptShowError("At topmost frame")
   else
