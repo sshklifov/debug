@@ -206,7 +206,7 @@ func s:ThreadsToQf(pat, threads)
   let list = []
   for key in keys(a:threads)
     for frame in a:threads[key]
-      let fullname = s:Get('', frame, 'fullname')
+      let fullname = get(frame, 'fullname', '')
       if filereadable(fullname) && match(fullname, a:pat) >= 0
         let text = printf('Thread %d at frame %d', key, frame['level'])
         call add(list, #{text: text, filename: frame['fullname'], lnum: frame['line']})
@@ -1258,8 +1258,8 @@ endfunc
 
 func s:PlaceSourceCursor(dict)
   let ns = nvim_create_namespace('TermDebugPC')
-  let filename = s:Get('', a:dict, 'fullname')
-  let lnum = s:Get('', a:dict, 'line')
+  let filename = get(a:dict, 'fullname', '')
+  let lnum = get(a:dict, 'line', '')
   if filereadable(filename) && str2nr(lnum) > 0
     let origw = win_getid()
     call TermDebugGoToSource()
@@ -1282,7 +1282,7 @@ func s:PlaceSourceCursor(dict)
 endfunc
 
 func s:PlaceAsmCursor(dict)
-  let addr = s:Get('', a:dict, 'addr')
+  let addr = get(a:dict, 'addr', '')
   if !s:SelectAsmAddr(addr)
     " Reload disassembly
     let cmd = printf("-data-disassemble -a %s 0", addr)
@@ -1580,18 +1580,18 @@ func s:Zip(keys, values) abort
   return dict
 endfunc
 
-" TODO more like get()
-func s:Get(def, dict, ...) abort
+func s:Get(dict, ...) abort
   if type(a:dict) != v:t_dict
     throw "Invalid arguments, expecting dictionary as second argument"
   endif
   let result = a:dict
-  for key in a:000
+  let default = a:000[-1]
+  for key in a:000[:-2]
     if type(key) != v:t_string
       throw "Invalid arguments, expecting string at third parameter and onwards"
     endif
     if type(result) != v:t_dict || !has_key(result, key)
-      return a:def
+      return default
     endif
     let result = result[key]
   endfor
@@ -1637,7 +1637,7 @@ func s:HandleThreadSelect(dict)
 endfunc
 
 func s:HandleBreakpointEdit(bp, dict)
-  let script = s:Get([], a:dict, 'BreakpointTable', 'body', 'bkpt', 'script')
+  let script = s:Get(a:dict, 'BreakpointTable', 'body', 'bkpt', 'script', [])
   if !empty(script) && bufname() == s:prompt_bufname
     call s:OpenFloatEdit(20, len(script), script)
     augroup TermDebugFloatEdit
@@ -1658,7 +1658,7 @@ endfunc
 func s:HandleSymbolInfo(dict)
   let list = []
   " Look in debug section
-  let dbg = s:Get([], a:dict, 'symbols', 'debug')
+  let dbg = s:Get(a:dict, 'symbols', 'debug', [])
   for location in dbg
     let filename = location['fullname']
     let valid = filereadable(filename)
@@ -1678,7 +1678,7 @@ func s:HandleSymbolInfo(dict)
     return
   endif
   " Look in nondebug section
-  let nondebug = s:Get([], a:dict, 'symbols', 'nondebug')
+  let nondebug = s:Get(a:dict, 'symbols', 'nondebug', [])
   for symbol in nondebug
     let address = symbol['address']
     let text = symbol['name']
@@ -1822,7 +1822,7 @@ func s:HandleFrameChange(going_up, dict)
   else
     let prefix = "/home/" .. $USER
     for frame in frames
-      let fullname = s:Get('', frame, 'fullname')
+      let fullname = get(frame, 'fullname', '')
       if filereadable(fullname) && stridx(fullname, prefix) == 0
         call s:PromptShowMessage([["Switching to frame #" .. frame['level'], "Normal"]])
         call s:ClearCursorSign()
@@ -1844,7 +1844,7 @@ func s:HandleBacktrace(dict)
   let list = []
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
-    let fullname = s:Get('', frame, 'fullname')
+    let fullname = get(frame, 'fullname', '')
     if filereadable(fullname)
       call add(list, #{text: frame['func'], filename: fullname, lnum: frame['line']})
     endif
