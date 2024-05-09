@@ -17,7 +17,7 @@ hi default debugBreakpointDisabled gui=reverse guibg=gray
 hi default link debugFrameFunction markdownLinkText
 hi default link debugFrameLocation Normal
 hi default link debugJumpSource markdownLinkText
-hi default link debugJumpFrame Italic
+hi default link debugFrameTag Italic
 hi default link debugExpandValue markdownLinkText
 hi default link debugPrintValue markdownCode
 
@@ -198,8 +198,23 @@ endfunc
 
 func TermDebugThreadInfo(...)
   let pat = get(a:000, 0, '')
-  let Cb = function('s:HandleThreadList', [pat])
+  let Cb = function('s:HandleThreadList', [function('s:ThreadsToQf', [pat])])
   call TermDebugSendMICommand('-thread-list-ids', Cb)
+endfunc
+
+func s:ThreadsToQf(pat, threads)
+  let list = []
+  for key in keys(a:threads)
+    for frame in a:threads[key]
+      let fullname = s:Get('', frame, 'fullname')
+      if filereadable(fullname) && match(fullname, a:pat) >= 0
+        let text = printf('Thread %d at frame %d', key, frame['level'])
+        call add(list, #{text: text, filename: frame['fullname'], lnum: frame['line']})
+      endif
+    endfor
+  endfor
+  call setqflist([], ' ', #{title: 'Threads', items: list})
+  copen
 endfunc
 "}}}
 
@@ -672,6 +687,10 @@ func s:PromptOutput(cmd)
     if name->s:IsCommand("thread", 1)
       return s:ThreadCommand(args)
     endif
+    if cmd[0]->s:IsCommand("info", 3) && cmd[1]->s:IsCommand("threads", 2)
+      let Cb = function('s:HandleThreadList', [function('s:ShowThreads')])
+      return TermDebugSendMICommand('-thread-list-ids', Cb)
+    endif
   endif
 
   " Good 'ol GDB commands
@@ -685,15 +704,22 @@ func s:PromptOutput(cmd)
     return s:SendMICommandNoOutput(cmd_console)
   endif
 
-  " Open new float window
-  if s:OptionSet('termdebug_floating_output')
-    call s:OpenFloatEdit(20, 1, [])
-    augroup TermDebugFloatEdit
-      autocmd! WinClosed * call s:CloseFloatEdit()
-    augroup END
+  if name->s:IsCommand('info', 3)
+    " Open new float window
+    if s:OptionSet('termdebug_floating_output')
+      call s:OpenFloatEdit(20, 1, [])
+      augroup TermDebugFloatEdit
+        autocmd! WinClosed * call s:CloseFloatEdit()
+      augroup END
+    endif
+    " Run command and redirect output to the window
+    return s:SendMICommandNoOutput(cmd_console)
   endif
-  " Run command and redirect output to the window
-  return s:SendMICommandNoOutput(cmd_console)
+
+  if s:OptionSet('termdebug_warn_command')
+    call s:PromptShowWarning("Unhandled command, running natively with GDB.")
+  endif
+  call s:SendMICommandNoOutput(cmd_console)
 endfunc
 
 func s:CommandsCommand(cmd)
@@ -794,6 +820,20 @@ func s:BacktraceCommand(max_levels)
   else
     call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameList'))
   endif
+endfunc
+
+func s:ShowThreads(threads)
+  let prefix = "/home/" .. $USER
+  for key in sort(keys(a:threads), "N")
+    for frame in a:threads[key]
+      let fullname = get(frame, 'fullname', '')
+      if filereadable(fullname) && stridx(fullname, prefix) == 0
+        let display_key = "(" .. key .. ")"
+        call s:ShowFrame(frame, display_key)
+        break
+      endif
+    endfor
+  endfor
 endfunc
 
 func s:ThreadCommand(id)
@@ -1540,6 +1580,7 @@ func s:Zip(keys, values) abort
   return dict
 endfunc
 
+" TODO more like get()
 func s:Get(def, dict, ...) abort
   if type(a:dict) != v:t_dict
     throw "Invalid arguments, expecting dictionary as second argument"
@@ -1590,6 +1631,7 @@ endfunc
 """"""""""""""""""""""""""""""""Result handles""""""""""""""""""""""""""""""""{{{
 func s:HandleThreadSelect(dict)
   let s:selected_thread = a:dict['new-thread-id']
+  let s:selected_frame = a:dict['frame']['level']
   call s:ClearCursorSign()
   call s:PlaceCursorSign(a:dict['frame'])
 endfunc
@@ -1724,13 +1766,14 @@ func s:HandleDisassemble(addr, dict)
   call s:SelectAsmAddr(a:addr)
 endfunc
 
-func s:ShowFrame(dict)
+func s:ShowFrame(dict, ...)
   let frame = a:dict
+  let level = (a:0 > 0 ? a:1 : "#" .. frame['level'])
   let location = "???"
   if has_key(frame, 'file')
     let location = fnamemodify(frame['file'], ":t")
   endif
-  let level_item = ["#" .. frame['level'], 'debugJumpFrame']
+  let level_item = [level, 'debugFrameTag']
   let in_item = [" in ", 'Normal']
   let func_item = [frame["func"], 'debugFrameFunction']
   let addr_item = [frame["addr"], 'Normal']
@@ -1759,6 +1802,7 @@ func s:HandleFrameList(dict)
 endfunc
 
 func s:HandleFrameChange(going_up, dict)
+  " TODO does not work with ASM
   let frames = s:GetListWithKeys(a:dict, 'stack')
   if a:going_up
     call filter(frames, "str2nr(v:val.level) > s:selected_frame")
@@ -1799,17 +1843,18 @@ func s:HandleBacktrace(dict)
   copen
 endfunc
 
-func s:HandleThreadList(pat, dict)
+" TODO =thread-created
+func s:HandleThreadList(Cb, dict)
   let ids = s:GetListWithKeys(a:dict, 'thread-ids')
   let s:pending_threads = len(ids)
   let s:collected = #{}
   for id in ids
-    let Cb = function('s:CollectThreads', [a:pat, id])
+    let Cb = function('s:CollectThreads', [a:Cb, id])
     call TermDebugSendMICommand('-stack-list-frames --thread ' . id, Cb)
   endfor
 endfunc
 
-func s:CollectThreads(pat, id, dict)
+func s:CollectThreads(Cb, id, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   let s:collected[a:id] = frames
   if len(s:collected) != s:pending_threads
@@ -1817,21 +1862,9 @@ func s:CollectThreads(pat, id, dict)
   endif
   " Wait for all threads
 
-  let list = []
-  for key in keys(s:collected)
-    for frame in s:collected[key]
-      let fullname = s:Get('', frame, 'fullname')
-      if filereadable(fullname) && match(fullname, a:pat) >= 0
-        let text = printf('Thread %d at frame %d', key, frame['level'])
-        call add(list, #{text: text, filename: frame['fullname'], lnum: frame['line']})
-      endif
-    endfor
-  endfor
-
+  call a:Cb(s:collected)
   unlet s:collected
   unlet s:pending_threads
-  call setqflist([], ' ', #{title: 'Threads', items: list})
-  copen
 endfunc
 
 func s:HandleError(dict)
