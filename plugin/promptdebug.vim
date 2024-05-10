@@ -325,8 +325,9 @@ func s:LaunchGdb()
   inoremap <buffer> <C-y> <cmd>call <SID>AcceptPreview()<CR>
   inoremap <buffer> <expr> <Up> <SID>ArrowMap("-1")
   inoremap <buffer> <expr> <Down> <SID>ArrowMap("+1")
-  inoremap <buffer> <Tab> <cmd>call <SID>TabMap()<CR>
-  inoremap <buffer> <expr> <CR> <SID>EnterMap()
+  inoremap <buffer> <Tab> <cmd>call <SID>TabMap("+1")<CR>
+  inoremap <buffer> <S-Tab> <cmd>call <SID>TabMap("-1")<CR>
+  inoremap <buffer> <CR> <cmd>call <SID>EnterMap()<CR>
   nnoremap <buffer> <CR> <cmd>call <SID>ExpandCursor(line('.'))<CR>
 
   startinsert
@@ -431,22 +432,9 @@ func s:CtrlW_Map()
   return repeat("\<BS>", n)
 endfunc
 
-func s:AcceptPreview()
-  if s:IsOpenPreview('Completion')
-    let completion = s:GetPreviewLine('.')
-    let cmd_parts = split(s:GetPrompt(), " ", 1)
-    let cmd_parts[-1] = completion
-    call s:SetPromptViaCmd(join(cmd_parts, " "))
-    call s:EndCompletion()
-  elseif s:IsOpenPreview('History')
-    call s:SetPromptViaCmd(s:GetPreviewLine('.'))
-    call s:EndHistory()
-  endif
-endfunc
-
-func s:TabMap()
+func s:TabMap(expr)
   if s:IsOpenPreview('Completion') || s:IsOpenPreview('History')
-    call s:AcceptPreview()
+    call s:ScrollPreview(a:expr)
   elseif empty(s:GetPrompt())
     call s:OpenHistory()
   else
@@ -489,14 +477,9 @@ func s:OpenCompletion()
 endfunc
 
 func s:ArrowMap(expr)
-  if s:IsOpenPreview("Completion") || s:IsOpenPreview("History")
-    call s:ScrollPreview(a:expr)
-    return ''
-  endif
   if empty(s:command_hist)
     return ''
   endif
-
   " Quickly scroll history (no preview)
   if a:expr == '-1'
     if !exists('s:command_hist_idx')
@@ -528,25 +511,44 @@ func s:EndHistory()
   endif
 endfunc
 
+func s:AcceptPreview()
+  if s:IsOpenPreview('Completion')
+    let completion = s:GetPreviewLine('.')
+    let cmd_parts = split(s:GetPrompt(), " ", 1)
+    let cmd_parts[-1] = completion
+    call s:SetPromptViaCmd(join(cmd_parts, " "))
+    call s:EndCompletion()
+  elseif s:IsOpenPreview('History')
+    call s:SetPromptViaCmd(s:GetPreviewLine('.'))
+    call s:EndHistory()
+  endif
+endfunc
+
 func s:EnterMap()
+  if s:IsOpenPreview('Completion') || s:IsOpenPreview('History')
+    return s:AcceptPreview()
+  endif
+
   call s:EndHistory()
   call s:EndCompletion()
   call s:EndPrinting()
+
   if !PromptDebugIsStopped()
-    return ''
+    return
   endif
   let cmd = s:GetPrompt()
+  call s:PromptShowNormal(getline('$'))
+  call s:SetPromptViaCmd('')
   if cmd =~ '\S'
     " Add to history and run command
     call add(s:command_hist, cmd)
-    return "\n"
+    call s:PromptOutput(cmd)
   else
     " Rerun last command
     if !empty(s:command_hist)
       let cmd = get(s:command_hist, -1, "")
       call s:PromptOutput(cmd)
     endif
-    return s:OptionSet('promptdebug_silent_rerun') ? "" : "\n"
   endif
 endfunc
 
