@@ -875,14 +875,15 @@ func s:PromptShowSourceLine()
       continue
     endif
     silent! unlet opts['end_row']
-    if has_key(opts, 'end_col')
-      let opts['end_col'] = min([opts['end_col'] + col_reshift, col_max])
+    if !has_key(opts, 'end_col')
+      continue
     endif
+    let opts['end_col'] += col_reshift
     silent! unlet opts['ns_id']
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, prompt_lnum, start_col, opts)
   endfor
   " Mark for jumping
-  call s:MarkCursorJump(expand("%:p"), lnum)
+  call s:MarkLastCursor(expand("%:p"), lnum)
 endfunc
 
 func s:GetLineExtmarks(b, ns, idx)
@@ -928,9 +929,10 @@ func s:ShowElided(lnum, var)
 
   if is_pretty || a:var['numchild'] > 0
     " Mark the variable
-    let key = (is_pretty ? string(pretty_idx) : "") .. name
+    let items = is_pretty ? [name, string(pretty_idx)] : [name]
+    call map(items, '[v:val, "EndOfBuffer"]')
     let ns = nvim_create_namespace('PromptDebugConcealVar')
-    call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, 0, #{virt_text: [[key, "EndOfBuffer"]]})
+    call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, 0, #{virt_text: items})
     let col = len(indent_item[0]) + len(name_item[0])
     let opts = #{end_col: col + len(value_item[0]), hl_group: 'debugExpandValue', priority: 10000}
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, col, opts)
@@ -966,20 +968,19 @@ func s:ExpandCursor(lnum)
   if empty(virt_extmark)
     return
   endif
-  let key = virt_extmark[0][3]['virt_text'][0][0]
+  let keys = map(extmarks[0][3]['virt_text'], 'v:val[0]')
   " Remove highlights to signal that the link is inactive
   call map(extmarks, 'nvim_buf_del_extmark(0, ns, v:val[0])')
   " Perform action based on key
-  if key[0] =~ '[0-9]'
-    let varname = key[len(pretty_idx):]
-    let pretty_idx = str2nr(key)
-    let PrettyPrinter = function(s:pretty_printers[pretty_idx][1])
+  if len(keys) == 2
+    let varname = keys[0]
+    let printer = s:pretty_printers[keys[1]][1]
     let indent = s:GetVariableIndent(varname, +1)
-    let Cb = function('s:ShowPrettyVar', [a:lnum, indent, PrettyPrinter])
+    let Cb = function('s:ShowPrettyVar', [a:lnum, indent, printer])
     call s:SendMICommand('-var-info-path-expression ' .. s:EscapeMIArgument(varname), Cb)
-  else
+  elseif len(keys) == 1
     let Cb = function('s:HandleVarChildren', [a:lnum])
-    return s:SendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(key), Cb)
+    return s:SendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(keys[0]), Cb)
   endif
 endfunc
 
@@ -989,27 +990,47 @@ func s:JumpCursor(lnum)
   if empty(extmarks)
     return v:false
   endif
-  let key = extmarks[0][3]['virt_text'][0][0]
-  let jump_pos = str2nr(key)
-  let jump_file = key[len(jump_pos):]
-  call PromptDebugGoToSource()
-  if expand("%:p") != jump_file
-    exe "e " . fnameescape(jump_file)
+  let keys = map(extmarks[0][3]['virt_text'], 'v:val[0]')
+  if len(keys) == 1
+    " Frame jump
+    call s:PromptShowNormal(prompt_getprompt(s:prompt_bufnr))
+    call s:PromptShowNormal("Jumping to frame #" .. keys[0])
+    call s:FrameCommand(keys[0])
+  elseif len(keys) == 2
+    if keys[0] =~ '^[0-9]' && keys[1] =~ '^[0-9]'
+      " Thread jump
+      call s:PromptShowNormal(prompt_getprompt(s:prompt_bufnr))
+      call s:PromptShowNormal("Jumping to thread ~" .. keys[0])
+      let Cb = function('s:HandleThreadJump', [keys[1]])
+      call s:SendMICommand('-thread-select ' .. s:EscapeMIArgument(keys[0]), Cb)
+    else
+      " Source jump
+      call PromptDebugGoToSource()
+      if expand("%:p") != keys[0]
+        exe "e " . fnameescape(keys[0])
+      endif
+      exe keys[1]
+      normal z.
+    endif
   endif
-  exe jump_pos
-  normal z.
   return v:true
 endfunc
 
-func s:MarkCursorJump(jump_file, jump_pos, ...)
-  let key = a:jump_pos .. a:jump_file
+func s:MarkCursor(pos, ...)
   let ns = nvim_create_namespace('PromptDebugConcealJump')
-  if a:0 > 0
-    let idx = a:1
+  if a:0 > 0 && type(a:1) == v:t_list
+    let items = copy(a:1)
   else
-    let idx = nvim_buf_line_count(s:prompt_bufnr) - 2
+    let items = copy(a:000)
   endif
-  call nvim_buf_set_extmark(s:prompt_bufnr, ns, idx, 0, #{virt_text: [[key, "EndOfBuffer"]]})
+  call map(items, 'type(v:val) == v:t_number ? string(v:val) : v:val')
+  call map(items, '[v:val, "EndOfBuffer"]')
+  call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:pos, 0, #{virt_text: items})
+endfunc
+
+func s:MarkLastCursor(...)
+  let pos = nvim_buf_line_count(s:prompt_bufnr) - 2
+  return s:MarkCursor(pos, a:000)
 endfunc
 
 func PromptDebugPrettyPrinter(regex, func)
@@ -1037,8 +1058,6 @@ func s:EndPrinting()
   call nvim_buf_clear_namespace(0, ns, 0, -1)
 endfunc
 "}}}
-
-" TODO: pressing enter on frame / threads
 
 """"""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
 func s:CommOutput(msg)
@@ -1096,7 +1115,6 @@ func s:HandleStream(msg)
   execute printf('let msg = %s', a:msg[1:])
   let lines = split(msg, "\n", 1)
   if s:floating_output
-    stopinsert
     " Lazily open the window
     if !exists('s:edit_win')
       call s:OpenFloatEdit(20, 1, [])
@@ -1111,7 +1129,8 @@ func s:HandleStream(msg)
     call appendbufline(bufnr, '$', lines[1:])
     " Resize float window
     let widths = map(getbufline(bufnr, 1, '$'), 'len(v:val)')
-    call s:OpenFloatEdit(max(widths), len(widths))
+    call s:OpenFloatEdit(max(widths) + 1, len(widths))
+    stopinsert
   endif
 endfunc
 
@@ -1584,6 +1603,11 @@ func s:HandleThreadSelect(dict)
   call s:RefreshCursorSign(a:dict['frame'])
 endfunc
 
+func s:HandleThreadJump(level, dict)
+  let s:selected_thread = a:dict['new-thread-id']
+  call s:FrameCommand(a:level)
+endfunc
+
 func s:HandleThreadStack(lnum, id, dict)
   let prefix = "/home/" .. $USER
   let frames = s:GetListWithKeys(a:dict, 'stack')
@@ -1595,7 +1619,7 @@ func s:HandleThreadStack(lnum, id, dict)
       let msg[0][0] = "~" .. a:id
       call s:PromptAppendMessage(a:lnum, msg)
       if has_key(frame, 'file') && filereadable(frame['file'])
-        call s:MarkCursorJump(frame['file'], frame['line'], a:lnum)
+        call s:MarkCursor(a:lnum, a:id, frame['level'])
       endif
       break
     endif
@@ -1618,14 +1642,14 @@ func s:HandleVarChildren(lnum, dict)
     endif
   endfor
   for child in optimized
-    let Cb = function('s:CollectVarChildren', [a:lnum])
+    let Cb = function('s:HandleVarChildren', [a:lnum])
     let name = child['name']
     call s:SendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(name), Cb)
   endfor
 endfunc
 
-func s:ShowPrettyVar(lnum, indent, PrettyPrinter, resolved)
-  let fields = a:PrettyPrinter(a:resolved['path_expr'])
+func s:ShowPrettyVar(lnum, indent, printer, resolved)
+  let fields = function(a:printer)(a:resolved['path_expr'])
   for field in reverse(fields)
     let [recurse, name, expr] = field
     let prefix = a:indent .. name .. " = "
@@ -1797,7 +1821,7 @@ func s:HandleFrameList(dict)
     let msg = s:FormatFrameMessage(frame)
     call s:PromptShowMessage(msg)
     if has_key(frame, 'file') && filereadable(frame['file'])
-      call s:MarkCursorJump(frame['file'], frame['line'])
+      call s:MarkLastCursor(frame['level'])
     endif
   endfor
 endfunc
