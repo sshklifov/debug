@@ -1176,6 +1176,12 @@ func s:HandleCursor(class, dict)
 endfunc
 
 func s:ShowStopReason(dict)
+  let reason = a:dict['reason']
+  if reason == 'function-finished' || reason == 'end-stepping-range'
+    " Ignore common reasons for GDB to stop
+    return
+  endif
+
   " This makes a huge difference visually
   call s:PromptShowNormal("")
 
