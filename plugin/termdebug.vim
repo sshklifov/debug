@@ -1,13 +1,13 @@
-" vim: set sw=2 ts=2 sts=2 foldmethod=marker et:
+" vim: set cc=111 sw=2 ts=2 sts=2 foldmethod=marker et:
 
 " In case this gets sourced twice.
-if exists('*TermDebugStart')
+if exists('*PromptDebugStart')
   finish
 endif
 
-" Name of the gdb command, defaults to "gdb".
-if !exists('g:termdebugger')
-  let g:termdebugger = 'gdb'
+" Name of the gdb command, defaults to 'gdb'.
+if !exists('g:promptdebugger')
+  let g:promptdebugger = 'gdb'
 endif
 
 " Highlights for sign column
@@ -22,16 +22,16 @@ hi default link debugExpandValue markdownLinkText
 hi default link debugPrintValue markdownCode
 
 """"""""""""""""""""""""""""""""Go to"""""""""""""""""""""""""""""""""""""""""{{{
-func TermDebugGoToPC()
-  if bufexists(s:pcbuf)
-    exe "b " . s:pcbuf
-    let ns = nvim_create_namespace('TermDebugPC')
+func PromptDebugGoToPC()
+  if bufexists(s:source_bufnr)
+    exe "b " . s:source_bufnr
+    let ns = nvim_create_namespace('PromptDebugPC')
     let pos = nvim_buf_get_extmarks(0, ns, 0, -1, #{})[0]
     call cursor(pos[1] + 1, 0)
   end
 endfunc
 
-func TermDebugGoToBreakpoint(id)
+func PromptDebugGoToBreakpoint(id)
   let id = a:id
   if !has_key(s:breakpoints, id)
     echo "No breakpoint " . id
@@ -40,19 +40,18 @@ func TermDebugGoToBreakpoint(id)
 
   let breakpoint = s:breakpoints[id]
   let lnum = breakpoint['lnum']
-  let fullname = breakpoint['fullname']
-  if !filereadable(fullname)
+  if !has_key(breakpoint, 'fullname')
     echo "No source for " . id
     return
   endif
-
+  let fullname = breakpoint['fullname']
   if expand("%:p") != fullname
     exe "e " . fnameescape(fullname)
   endif
   call cursor(lnum, 0)
 endfunc
 
-func TermDebugGoToCapture()
+func PromptDebugGoToCapture()
   let ids = win_findbuf(s:capture_bufnr)
   if empty(ids)
     exe "tabnew " . s:capture_bufname
@@ -61,14 +60,14 @@ func TermDebugGoToCapture()
   endif
 endfunc
 
-func TermDebugGoToSource()
+func PromptDebugGoToSource()
   if !win_gotoid(s:sourcewin)
     below new
     let s:sourcewin = win_getid(winnr())
   endif
 endfunc
 
-func TermDebugGoToGdb()
+func PromptDebugGoToGdb()
   let wids = win_findbuf(s:prompt_bufnr)
   if !empty(wids)
     call win_gotoid(wids[0])
@@ -80,36 +79,51 @@ endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Global functions""""""""""""""""""""""""""""""{{{
-func TermDebugIsOpen()
+func PromptDebugIsOpen()
   if !exists('s:gdb_job_id')
     return v:false
   endif
   silent! return jobpid(s:gdb_job_id) > 0
 endfunc
 
-func TermDebugIsStopped()
-  if !TermDebugIsOpen()
-    return v:true
+func PromptDebugIsStopped()
+  if !exists('s:stopped')
+    return v:false
   endif
   return s:stopped
 endfunc
 
-func TermDebugQuit()
+func PromptDebugQuit()
   call s:SendMICommandNoOutput('-gdb-exit')
 endfunc
 
-func TermDebugGetPid()
-  if !TermDebugIsOpen()
+func PromptDebugGetPid()
+  if !exists('s:pid')
     return 0
   endif
   return s:pid
 endfunc
 
-func TermDebugShowPwd()
-  call TermDebugSendMICommand('-environment-pwd', function('s:HandlePwd'))
+func PromptDebugShowPwd()
+  call s:SendMICommand('-environment-pwd', function('s:HandlePwd'))
 endfunc
 
-func TermDebugSendMICommand(cmd, Callback)
+func PromptDebugSendCommands(...)
+  for cmd in a:000
+    call PromptDebugSendCommand(cmd)
+  endfor
+endfunc
+
+func PromptDebugSendCommand(cmd)
+  if !PromptDebugIsStopped()
+    echo "Cannot send command. Program is running."
+    return
+  endif
+  let msg = '-interpreter-exec console ' .. s:EscapeMIArgument(a:cmd)
+  call s:SendMICommandNoOutput(msg)
+endfunc
+
+func s:SendMICommand(cmd, Callback)
   let token = s:token_counter
   let s:token_counter += 1
   let s:callbacks[token] = a:Callback
@@ -119,7 +133,7 @@ endfunc
 
 function s:SendMICommandNoOutput(cmd)
   let IgnoreOutput = {_ -> {}}
-  return TermDebugSendMICommand(a:cmd, IgnoreOutput)
+  return s:SendMICommand(a:cmd, IgnoreOutput)
 endfunction
 
 " Accepts either a console command or a C++ expression
@@ -137,59 +151,40 @@ func s:EscapeMIArgument(arg)
   return escaped .. '"'
 endfunc
 
-func TermDebugSendCommand(cmd)
-  if !TermDebugIsStopped()
-    echo "Cannot send command. Program is running."
-    return
-  endif
-  let msg = '-interpreter-exec console ' .. s:EscapeMIArgument(a:cmd)
-  call s:SendMICommandNoOutput(msg)
-endfunc
-
-func TermDebugSendCommands(...)
-  if !TermDebugIsStopped()
-    echo "Cannot send command. Program is running."
-    return
-  endif
-  for cmd in a:000
-    call chansend(s:gdb_job_id, cmd . "\n")
-  endfor
-endfunc
-
-func TermDebugSetAsmMode(asm_mode)
+func s:SwitchAsmMode(asm_mode)
   if s:asm_mode != a:asm_mode
     let s:asm_mode = a:asm_mode
     call s:ClearCursorSign()
     let cmd = printf('-stack-info-frame --thread %d --frame %d', s:selected_thread, s:selected_frame)
-    call TermDebugSendMICommand(cmd, {dict -> s:PlaceCursorSign(dict['frame'])})
+    call s:SendMICommand(cmd, {dict -> s:PlaceCursorSign(dict['frame'])})
   endif
 endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Sugar"""""""""""""""""""""""""""""""""""""""""{{{
-func TermDebugEditCommands(...)
+func PromptDebugEditCommands(...)
   if a:0 > 0 
     let br = a:1
   else
     let br = max(map(keys(s:breakpoints), "str2nr(v:val)"))
   endif
-  let Cb = function('s:HandleBreakpointEdit', [br])
-  call TermDebugSendMICommand("-break-info " . br, Cb)
+  let Cb = function('s:HandleBreakpointCommands', [br])
+  call s:SendMICommand("-break-info " . br, Cb)
 endfunc
 
-func TermDebugFindSym(func)
+func PromptDebugFindSym(func)
   let cmd = '-symbol-info-functions --include-nondebug --max-results 20 --name ' . a:func
-  call TermDebugSendMICommand(cmd, function('s:HandleSymbolInfo'))
+  call s:SendMICommand(cmd, function('s:HandleSymbolInfo'))
 endfunc
 
-func TermDebugPrintMICommand(cmd)
-  call TermDebugSendMICommand(a:cmd, {dict -> nvim_echo([[string(dict), 'Normal']], 1, #{})})
+func PromptDebugPrintMICommand(cmd)
+  call s:SendMICommand(a:cmd, {dict -> nvim_echo([[string(dict), 'Normal']], 1, #{})})
 endfunc
 
-func TermDebugEvaluate(what)
+func PromptDebugEvaluate(what)
   let cmd = '-data-evaluate-expression ' .. s:EscapeMIArgument(a:what)
-  let Cb = function('s:HandleEvaluate', [win_getid()])
-  call TermDebugSendMICommand(cmd, Cb)
+  let Cb = function('s:HandleEvaluate')
+  call s:SendMICommand(cmd, Cb)
 endfunc
 "}}}
 
@@ -200,18 +195,18 @@ func s:OptionSet(name)
   return get(g:, a:name, v:false)
 endfunc
 
-func TermDebugStart(...)
-  if TermDebugIsOpen()
+func PromptDebugStart(...)
+  if PromptDebugIsOpen()
     echo 'Terminal debugger already running, cannot run two'
     return
   endif
-  if !executable(g:termdebugger)
-    echo 'Cannot execute debugger program "' .. g:termdebugger .. '"'
+  if !executable(g:promptdebugger)
+    echo 'Cannot execute debugger program "' .. g:promptdebugger .. '"'
     return
   endif
 
-  if exists('#User#TermDebugStartPre')
-    doauto <nomodeline> User TermDebugStartPre
+  if exists('#User#PromptDebugStartPre')
+    doauto <nomodeline> User PromptDebugStartPre
   endif
 
   " Remove all prior variables
@@ -227,17 +222,19 @@ func TermDebugStart(...)
   const s:prompt_bufname = "Gdb terminal"
   " Exceptions thrown
   const s:eval_exception = "EvalFailedException"
-  const s:float_edit_exception = "FloatEditException"
-  " Set defaults for required variables
+  " Custom pretty printers (can be expanded by user)
   let s:pretty_printers = [
         \ ['std::vector', "s:PrettyPrinterVector"],
         \ ['std::string', "s:PrettyPrinterString"],
         \ ]
+  " Set defaults for required variables
   let s:vars = []
   let s:thread_ids = #{}
   let s:breakpoints = #{}
+  let s:multi_brs = #{}
   let s:callbacks = #{}
-  let s:pcbuf = -1
+  let s:floating_output = 0
+  let s:source_bufnr = -1
   let s:pid = 0
   let s:stopped = 1
   let s:asm_mode = 0
@@ -256,7 +253,7 @@ func TermDebugStart(...)
 
   call s:CreateSpecialBuffers()
 
-  augroup TermDebug
+  augroup PromptDebug
     autocmd! BufRead * call s:BufRead()
   augroup END
 
@@ -264,18 +261,18 @@ func TermDebugStart(...)
 endfunc
 
 func s:LaunchGdb()
-  let gdb_cmd = [g:termdebugger]
+  let gdb_cmd = [g:promptdebugger]
   " Add -quiet to avoid the intro message causing a hit-enter prompt.
   call add(gdb_cmd, '-quiet')
   " Communicate with GDB in the background via MI interface
   call add(gdb_cmd, '--interpreter=mi')
-  " Disable pagination, it causes everything to stop at the gdb
+  " Disable pagination, it causes everything to stop
   call extend(gdb_cmd, ['-iex', 'set pagination off'])
   " Ignore inferior stdout 
   call extend(gdb_cmd, ['-iex', 'set inferior-tty /dev/null'])
   " Remove the (gdb) prompt
   call extend(gdb_cmd, ['-iex', 'set prompt'])
-  " Limit completions for faster TAB autocomplete
+  " Limit completions for faster autocomplete
   call extend(gdb_cmd, ['-iex', 'set max-completions ' . s:max_completions])
   " Do not open a shell to run inferior
   call extend(gdb_cmd, ['-iex', 'set startup-with-shell off'])
@@ -292,7 +289,7 @@ func s:LaunchGdb()
   let s:gdbwin = win_getid(winnr())
   let s:gdb_job_id = jobstart(gdb_cmd, {
         \ 'on_stdout': function('s:CommJoin'),
-        \ 'on_exit': function('s:EndTermDebug'),
+        \ 'on_exit': function('s:EndPromptDebug'),
         \ 'pty': v:false
         \ })
   if s:gdb_job_id == 0
@@ -316,20 +313,19 @@ func s:LaunchGdb()
     call s:PromptShowNormal("Local debugging")
   endif
 
-  augroup TermDebug
+  augroup PromptDebug
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
   augroup END
 
-  inoremap <buffer> <expr> <C-d> <SID>CtrlD_Map()
-  inoremap <buffer> <expr> <C-c> <SID>CtrlC_Map()
+  inoremap <buffer> <C-d> <cmd>call <SID>CtrlD_Map()<CR>
+  inoremap <buffer> <C-c> <cmd>call <SID>CtrlC_Map()<CR>
   inoremap <buffer> <expr> <C-w> <SID>CtrlW_Map()
-  inoremap <buffer> <C-Space> <cmd>call <SID>CtrlSpace_Map()<CR>
   inoremap <buffer> <C-n> <cmd>call <SID>ScrollPreview("+1")<CR>
   inoremap <buffer> <C-p> <cmd>call <SID>ScrollPreview("-1")<CR>
-  inoremap <buffer> <expr> <C-y> <SID>TabMap()
+  inoremap <buffer> <C-y> <cmd>call <SID>AcceptPreview()<CR>
   inoremap <buffer> <expr> <Up> <SID>ArrowMap("-1")
   inoremap <buffer> <expr> <Down> <SID>ArrowMap("+1")
-  inoremap <buffer> <expr> <Tab> <SID>TabMap()
+  inoremap <buffer> <Tab> <cmd>call <SID>TabMap()<CR>
   inoremap <buffer> <expr> <CR> <SID>EnterMap()
   nnoremap <buffer> <CR> <cmd>call <SID>ExpandCursor(line('.'))<CR>
 
@@ -408,16 +404,14 @@ func s:EmptyBuffer(nr)
 endfunc
 
 func s:CtrlD_Map()
-  call TermDebugQuit()
-  return ''
+  call PromptDebugQuit()
 endfunc
 
 func s:CtrlC_Map()
-  if TermDebugIsStopped()
+  if PromptDebugIsStopped()
     let input = getbufline(s:prompt_bufnr, '$')[0]
     call s:PromptShowMessage([[input, "Normal"], ["^C", "Cursor"]])
-    s:SetCommandLine("")
-    return ''
+    call s:SetPromptViaCmd("")
   else
     " Send interrupt
     let interrupt = 2
@@ -429,32 +423,31 @@ func s:CtrlC_Map()
       call system(["ssh", s:host, kill])
     endif
   endif
-  return ''
 endfunc
 
 func s:CtrlW_Map()
-  let [cmd_pre, cmd_post] = s:GetCommandLine(2)
+  let [cmd_pre, cmd_post] = s:GetPrompt(2)
   let n = len(matchstr(cmd_pre, '\S*\s*$'))
   return repeat("\<BS>", n)
 endfunc
 
-func s:TabMap()
-  " XXX: CAN'T close preview window here because of <expr> map
+func s:AcceptPreview()
   if s:IsOpenPreview('Completion')
-    let cmp = s:GetPreviewLine('.')
-    let cmd_parts = split(s:GetCommandLine(), " ", 1)
-    let cmd_parts[-1] = cmp
-    return s:SetCommandLine(join(cmd_parts, " "))
+    let completion = s:GetPreviewLine('.')
+    let cmd_parts = split(s:GetPrompt(), " ", 1)
+    let cmd_parts[-1] = completion
+    call s:SetPromptViaCmd(join(cmd_parts, " "))
+    call s:EndCompletion()
   elseif s:IsOpenPreview('History')
-    let cmdline = s:SetCommandLine(s:GetPreviewLine('.'))
-    return cmdline
-  else
-    return ""
+    call s:SetPromptViaCmd(s:GetPreviewLine('.'))
+    call s:EndHistory()
   endif
 endfunc
 
-func s:CtrlSpace_Map()
-  if empty(s:GetCommandLine())
+func s:TabMap()
+  if s:IsOpenPreview('Completion') || s:IsOpenPreview('History')
+    call s:AcceptPreview()
+  elseif empty(s:GetPrompt())
     call s:OpenHistory()
   else
     call s:OpenCompletion()
@@ -470,16 +463,17 @@ func s:OpenHistory()
 endfunc
 
 func s:OpenCompletion()
-  let cmd = s:GetCommandLine()
+  let cmd = s:GetPrompt()
   let context = split(cmd, " ", 1)[-1]
+  " If possible, avoid asking GDB about completions
   if exists('s:preview_win')
     let nr = nvim_win_get_buf(s:preview_win)
     if nvim_buf_line_count(nr) < s:max_completions
       if stridx(cmd, s:previous_cmd) == 0 && cmd[-1:-1] !~ '\s'
-        let matches = filter(getbufline(nr, 1, '$'), 'stridx(v:val, context) == 0 && v:val != context')
+        let matches = filter(getbufline(nr, 1, '$'), 'stridx(v:val, context) == 0')
         " Just refresh the preview
         if empty(matches)
-          call s:ClosePreview()
+          call s:EndCompletion()
         else
           call s:OpenScrollablePreview("Completion", matches)
           call s:ScrollPreview("1")
@@ -491,7 +485,7 @@ func s:OpenCompletion()
   endif
   " Need to refetch completions from GDB
   let Cb = function('s:HandleCompletion', [cmd])
-  call TermDebugSendMICommand('-complete ' . s:EscapeMIArgument(cmd), Cb)
+  call s:SendMICommand('-complete ' . s:EscapeMIArgument(cmd), Cb)
 endfunc
 
 func s:ArrowMap(expr)
@@ -507,10 +501,10 @@ func s:ArrowMap(expr)
   if a:expr == '-1'
     if !exists('s:command_hist_idx')
       let s:command_hist_idx = len(s:command_hist)
-      call add(s:command_hist, s:GetCommandLine())
-      augroup TermDebugHistory
-        autocmd! InsertLeave * call s:EndHistoryScrolling(1)
-        autocmd! CursorMovedI * call s:EndHistoryScrolling(0)
+      call add(s:command_hist, s:GetPrompt())
+      augroup PromptDebugHistory
+        autocmd! InsertLeave * call s:EndHistory()
+        autocmd! CursorMovedI * call s:EndHistory()
       augroup END
     endif
     let s:command_hist_idx = max([s:command_hist_idx - 1, 0])
@@ -520,59 +514,65 @@ func s:ArrowMap(expr)
     endif
     let s:command_hist_idx = min([s:command_hist_idx + 1, len(s:command_hist) - 1])
   endif
-  return s:SetCommandLine(s:command_hist[s:command_hist_idx])
+  return s:SetPromptViaKeys(s:command_hist[s:command_hist_idx])
 endfunc
 
-func s:EndHistoryScrolling(force)
+func s:EndHistory()
+  call s:ClosePreview()
   if exists('s:command_hist_idx')
-    let parts = s:GetCommandLine(2)
-    if a:force || parts[1] != '' || join(parts, '') != s:command_hist[s:command_hist_idx]
-      call remove(s:command_hist, -1)
-      unlet s:command_hist_idx
-    endif
+    call remove(s:command_hist, -1)
+    unlet s:command_hist_idx
   endif
-  if exists('#TermDebugHistory')
-    au! TermDebugHistory
+  if exists('#PromptDebugHistory')
+    au! PromptDebugHistory
   endif
 endfunc
 
 func s:EnterMap()
-  call s:EndHistoryScrolling(1)
+  call s:EndHistory()
   call s:EndCompletion()
   call s:EndPrinting()
-  if !TermDebugIsStopped()
+  if !PromptDebugIsStopped()
     return ''
   endif
-
-  let cmd = s:GetCommandLine()
+  let cmd = s:GetPrompt()
   if cmd =~ '\S'
     " Add to history and run command
     call add(s:command_hist, cmd)
     return "\n"
   else
-    " Silently rerun last command
+    " Rerun last command
     if !empty(s:command_hist)
       let cmd = get(s:command_hist, -1, "")
       call s:PromptOutput(cmd)
     endif
-    return s:OptionSet('termdebug_silent_rerun') ? "" : "\n"
+    return s:OptionSet('promptdebug_silent_rerun') ? "" : "\n"
   endif
 endfunc
 
-func s:GetCommandLine(...)
+func s:GetPrompt(...)
   let line = getbufline(s:prompt_bufnr, '$')[0]
-  let off = len(prompt_getprompt(s:prompt_bufnr))
+  let offset = len(prompt_getprompt(s:prompt_bufnr))
   let parts = get(a:000, 0, 1)
   if parts == 1
-    return line[off:]
+    return line[offset:]
   else
     let col = getcurpos()[2] - 1
-    return [line[off:col-1], line[col:]]
+    return [line[offset:col-1], line[col:]]
   endif
 endfunc
 
-func s:SetCommandLine(cmd)
+" Which keys need to be pressed (use for <expr> maps)
+func s:SetPromptViaKeys(cmd)
   return "\<C-U>" .. a:cmd
+endfunc
+
+" Which commands need to be performed (use for <cmd> mads)
+func s:SetPromptViaCmd(cmd)
+  let prompt = prompt_getprompt(s:prompt_bufnr)
+  let line = prompt .. a:cmd
+  call setbufline(s:prompt_bufnr, '$', line)
+  call cursor('$', len(line) + 1)
 endfunc
 " }}}
 
@@ -585,6 +585,7 @@ func s:PromptOutput(cmd)
   if empty(a:cmd)
     return
   endif
+
   " Check if in command> mode
   if prompt_getprompt(s:prompt_bufnr) =~ 'command>'
     return s:CommandsOutput(a:cmd)
@@ -594,18 +595,18 @@ func s:PromptOutput(cmd)
   let name = cmd[0]
   let args = join(cmd[1:], " ")
 
-  " Remapped commands (required in order to work)
+  " Special commands (HEREDOC input)
   if name->s:IsCommand("commands", 3)
-    return s:CommandsCommand(cmd)
+    return s:CommandsCommand(cmd[1:])
   endif
 
-  " Unsupported commands (need remapping)
+  " Unsupported commands
   if name->s:IsCommand("python", 2)
-    return s:PromptShowError("No python support yet!")
+    return s:PromptShowError("No python support!")
   elseif name[0] == "!" || name->s:IsCommand("shell", 3)
-    return s:PromptShowError("No shell support yet!")
+    return s:PromptShowError("No shell support!")
   elseif name->s:IsCommand("edit", 2)
-    return s:PromptShowError("No edit support (ever)!")
+    return s:PromptShowError("No edit support!")
   endif
 
   " Custom commands
@@ -616,50 +617,50 @@ func s:PromptOutput(cmd)
   endif
 
   " Overriding GDB commands
-  if s:OptionSet('termdebug_override_finish_and_return')
+  if s:OptionSet('promptdebug_override_finish_and_return')
     if name->s:IsCommand("finish", 3)
       return s:FinishCommand()
     elseif name->s:IsCommand("return", 3)
       return s:ReturnCommand()
     endif
   endif
-  if s:OptionSet('termdebug_override_up_and_down')
+  if s:OptionSet('promptdebug_override_up_and_down')
     if name == "up"
       return s:UpCommand()
     elseif name == "down"
       return s:DownCommand()
     endif
   endif
-  if s:OptionSet('termdebug_override_s_and_n')
+  if s:OptionSet('promptdebug_override_s_and_n')
     if name == "asm"
       return s:AsmCommand()
     elseif name == "si" || name == "stepi"
-      call TermDebugSetAsmMode(1)
+      call s:SwitchAsmMode(1)
       return s:SendMICommandNoOutput('-exec-step-instruction')
     elseif name == "ni" || name == "nexti"
-      call TermDebugSetAsmMode(1)
+      call s:SwitchAsmMode(1)
       return s:SendMICommandNoOutput('-exec-next-instruction')
     elseif name == "s" || name == "step"
-      call TermDebugSetAsmMode(0)
+      call s:SwitchAsmMode(0)
       return s:SendMICommandNoOutput('-exec-step')
     elseif name == "n" || name == "next"
-      call TermDebugSetAsmMode(0)
+      call s:SwitchAsmMode(0)
       return s:SendMICommandNoOutput('-exec-next')
     endif
   endif
-  if s:OptionSet('termdebug_override_p')
+  if s:OptionSet('promptdebug_override_p')
     if name == "p" || name == "print"
       return s:PrintCommand(args)
     endif
   endif
-  if s:OptionSet('termdebug_override_f_and_bt')
+  if s:OptionSet('promptdebug_override_f_and_bt')
     if name->s:IsCommand("frame", 1)
       return s:FrameCommand(args)
     elseif name == "bt" || name->s:IsCommand("backtrace", 1)
       return s:BacktraceCommand(args)
     endif
   endif
-  if s:OptionSet('termdebug_override_t')
+  if s:OptionSet('promptdebug_override_t')
     if name->s:IsCommand("thread", 1)
       return s:ThreadCommand(args)
     endif
@@ -679,41 +680,27 @@ func s:PromptOutput(cmd)
     return s:SendMICommandNoOutput(cmd_console)
   endif
 
-  if name->s:IsCommand('info', 3)
-    " Open new float window
-    if s:OptionSet('termdebug_floating_output')
-      call s:OpenFloatEdit(20, 1, [])
-      augroup TermDebugFloatEdit
-        autocmd! WinClosed * call s:CloseFloatEdit()
-      augroup END
-    endif
-    " Run command and redirect output to the window
-    return s:SendMICommandNoOutput(cmd_console)
-  endif
-
-  if s:OptionSet('termdebug_warn_command')
-    call s:PromptShowWarning("Unhandled command, running natively with GDB.")
-  endif
-  call s:SendMICommandNoOutput(cmd_console)
+  " Run command and redirect output to floating window
+  let s:floating_output = 1
+  return s:SendMICommandNoOutput(cmd_console)
 endfunc
 
-func s:CommandsCommand(cmd)
-  let brs = a:cmd[1:]
-  if empty(brs)
+func s:CommandsCommand(brs)
+  if empty(a:brs)
     if empty(s:breakpoints)
       return s:PromptShowError("No breakpoints")
     else
       let last_br = max(map(keys(s:breakpoints), "str2nr(v:val)"))
-      call add(brs, last_br)
+      let s:prompt_commands = [last_br]
     endif
+  else
+    for brk in a:brs
+      if !has_key(s:breakpoints, brk) && !has_key(s:multi_brs, brk)
+        return s:PromptShowError("No breakpoint number " . brk)
+      endif
+    endfor
+    let s:prompt_commands = brs
   endif
-  for brk in brs
-    if !has_key(s:breakpoints, brk)
-      call s:PromptShowError("No breakpoint number " . brk)
-      return
-    endif
-  endfor
-  let s:prompt_commands = brs
   call prompt_setprompt(s:prompt_bufnr, 'command> ')
 endfunc
 
@@ -726,7 +713,6 @@ func s:CommandsOutput(cmd)
   else
     call add(s:prompt_commands, s:EscapeMIArgument(a:cmd))
   endif
-  return
 endfunc
 
 func s:QfSourceCommand()
@@ -737,19 +723,18 @@ func s:QfSourceCommand()
     let fname = fnamemodify(bufname(item['bufnr']), ":p")
     let lnum = item['lnum']
     let loc = fname . ":" . lnum
-    call TermDebugSendMICommand("-break-insert " . loc, function('s:HandleNewBreakpoint'))
+    call s:SendMICommand("-break-insert " . loc, function('s:HandleNewBreakpoint'))
   endfor
   call s:PromptShowNormal("Breakpoints loaded from quickfix")
 endfunc
 
 func s:QfSaveCommand()
-  let items = map(items(s:breakpoints), {_, item -> {
+  let valid_brs = filter(copy(s:breakpoints), 'has_key(v:val, "fullname")')
+  let items = map(items(valid_brs), {_, item -> {
         \ "text": "Breakpoint " . item[0],
         \ "filename": item[1]['fullname'],
-        \ "lnum": item[1]['lnum'],
-        \ "valid": filereadable(item[1]['fullname'])
+        \ "lnum": item[1]['lnum']
         \ }})
-  call filter(items, "v:val.valid")
   if empty(items)
     call s:PromptShowError("No breakpoints")
   endif
@@ -772,34 +757,34 @@ func s:ReturnCommand()
 endfunc
 
 func s:UpCommand()
-  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameChange', [v:true]))
+  call s:SendMICommand('-stack-list-frames', function('s:HandleFrameChange', [v:true]))
 endfunc
 
 func s:DownCommand()
-  call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameChange', [v:false]))
+  call s:SendMICommand('-stack-list-frames', function('s:HandleFrameChange', [v:false]))
 endfunc
 
 func s:AsmCommand()
-  call TermDebugSetAsmMode(s:asm_mode ? 0 : 1)
+  call s:SwitchAsmMode(s:asm_mode ? 0 : 1)
 endfunc
 
 func s:FrameCommand(level)
   let level = empty(a:level) ? s:selected_frame : a:level
   let cmd = printf('-stack-info-frame --frame %d --thread %d', level, s:selected_thread)
-  call TermDebugSendMICommand(cmd, function('s:HandleFrameJump', [level]))
+  call s:SendMICommand(cmd, function('s:HandleFrameJump', [level]))
 endfunc
 
 func s:BacktraceCommand(max_levels)
   if !empty(a:max_levels)
-    call TermDebugSendMICommand('-stack-list-frames 0 ' .. a:max_levels, function('s:HandleFrameList'))
+    call s:SendMICommand('-stack-list-frames 0 ' .. a:max_levels, function('s:HandleFrameList'))
   else
-    call TermDebugSendMICommand('-stack-list-frames', function('s:HandleFrameList'))
+    call s:SendMICommand('-stack-list-frames', function('s:HandleFrameList'))
   endif
 endfunc
 
 func s:ThreadCommand(id)
   let Cb = function('s:HandleThreadSelect')
-  call TermDebugSendMICommand('-thread-select ' .. s:EscapeMIArgument(a:id), Cb)
+  call s:SendMICommand('-thread-select ' .. s:EscapeMIArgument(a:id), Cb)
 endfunc
 
 func s:InfoThreadsCommand(id)
@@ -809,30 +794,14 @@ func s:InfoThreadsCommand(id)
     let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
     let ids = sort(keys(s:thread_ids), 'N')
     for id in reverse(ids)
-      let Cb = function('s:ShowThread', [lnum, id])
-      call TermDebugSendMICommand('-stack-list-frames --thread ' . id, Cb)
+      let Cb = function('s:HandleThreadStack', [lnum, id])
+      call s:SendMICommand('-stack-list-frames --thread ' . id, Cb)
     endfor
   endif
 endfunc
+" }}}
 
-func s:ShowThread(lnum, id, dict)
-  let prefix = "/home/" .. $USER
-  let frames = s:GetListWithKeys(a:dict, 'stack')
-  for frame in frames
-    let fullname = get(frame, 'fullname', '')
-    if filereadable(fullname) && stridx(fullname, prefix) == 0
-      let msg = s:FormatFrameMessage(frame)
-      " Display thread id instead of frame id
-      let msg[0][0] = "(" .. a:id .. ")"
-      call s:PromptAppendMessage(a:lnum, msg)
-      if has_key(frame, 'file') && filereadable(frame['file'])
-        call s:MarkCursorJump(frame['file'], frame['line'], a:lnum)
-      endif
-      break
-    endif
-  endfor
-endfunc
-
+""""""""""""""""""""""""""""""""Printing""""""""""""""""""""""""""""""""""""""{{{
 func s:PromptShowMessage(msg)
   let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
   call s:PromptAppendMessage(lnum, a:msg)
@@ -842,7 +811,7 @@ func s:PromptAppendMessage(lnum, msg)
   let line = join(map(copy(a:msg), "v:val[0]"), '')
   call appendbufline(s:prompt_bufnr, a:lnum, line)
 
-  let ns = nvim_create_namespace('TermDebugHighlight')
+  let ns = nvim_create_namespace('PromptDebugHighlight')
   let end_col = 0
   for [msg, hl_group] in a:msg
     let start_col = end_col
@@ -891,7 +860,7 @@ func s:PromptShowSourceLine()
   const col_max = len(join(map(items, "v:val[0]"), ""))
   " Apply extmarks to prompt line
   let extmarks = s:GetLineExtmarks(0, -1, lnum - 1)
-  let ns = nvim_create_namespace('TermDebugHighlight')
+  let ns = nvim_create_namespace('PromptDebugHighlight')
   let prompt_lnum = nvim_buf_line_count(s:prompt_bufnr) - 2
   for extm in extmarks
     let start_col = extm[2] + col_reshift
@@ -912,7 +881,6 @@ func s:PromptShowSourceLine()
     silent! unlet opts['ns_id']
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, prompt_lnum, start_col, opts)
   endfor
-
   " Mark for jumping
   call s:MarkCursorJump(expand("%:p"), lnum)
 endfunc
@@ -921,12 +889,10 @@ func s:GetLineExtmarks(b, ns, idx)
   let line = nvim_buf_get_lines(a:b, a:idx, a:idx + 1, v:true)[0]
   return nvim_buf_get_extmarks(a:b, a:ns, [a:idx, 0], [a:idx, len(line)], #{details: v:true})
 endfunc
-" }}}
 
-""""""""""""""""""""""""""""""""Printing""""""""""""""""""""""""""""""""""""""{{{
 func s:PrintCommand(expr)
   let Cb = function('s:ShowValue', [a:expr])
-  call TermDebugSendMICommand('-var-create - * ' . s:EscapeMIArgument(a:expr), Cb)
+  call s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(a:expr), Cb)
 endfunc
 
 func s:ShowValue(expr, dict)
@@ -963,7 +929,7 @@ func s:ShowElided(lnum, var)
   if is_pretty || a:var['numchild'] > 0
     " Mark the variable
     let key = (is_pretty ? string(pretty_idx) : "") .. name
-    let ns = nvim_create_namespace('TermDebugConcealVar')
+    let ns = nvim_create_namespace('PromptDebugConcealVar')
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, 0, #{virt_text: [[key, "EndOfBuffer"]]})
     let col = len(indent_item[0]) + len(name_item[0])
     let opts = #{end_col: col + len(value_item[0]), hl_group: 'debugExpandValue', priority: 10000}
@@ -986,38 +952,39 @@ endfunc
 " Perform an action based on a hidden string message at line
 " - If the mark starts with an alpha character, the mark is a name of a variable that
 " should be expanded.
-" - Instead, it will start with digits followed by a non-digit character. If this is '/',
-" then the mark is a location (filename + line number) that will be jumped to
-" - Otherwise, the mark is a name of a variable that should be pretty printed. The leading
-" number signifies the index of the pretty printer
+" - Instead, it will start with digits followed by a non-digit character. This is either
+" a location (line number + filename) or a pretty printer index + variable
 func s:ExpandCursor(lnum)
+  " Is it a location tag that should be jumped to?
   if s:JumpCursor(a:lnum)
     return
   endif
-  " Index into created marks
-  let ns = nvim_create_namespace('TermDebugConcealVar')
+  " If not, then it must be a variable that should be printed
+  let ns = nvim_create_namespace('PromptDebugConcealVar')
   let extmarks = s:GetLineExtmarks(0, ns, a:lnum - 1)
-  let var_extmark = filter(copy(extmarks), 'has_key(v:val[3], "virt_text")')
-  if empty(var_extmark)
+  let virt_extmark = filter(copy(extmarks), 'has_key(v:val[3], "virt_text")')
+  if empty(virt_extmark)
     return
   endif
-  let key = var_extmark[0][3]['virt_text'][0][0]
+  let key = virt_extmark[0][3]['virt_text'][0][0]
   " Remove highlights to signal that the link is inactive
   call map(extmarks, 'nvim_buf_del_extmark(0, ns, v:val[0])')
   " Perform action based on key
   if key[0] =~ '[0-9]'
-    let pretty_idx = str2nr(key)
     let varname = key[len(pretty_idx):]
-    return s:ShowPrettyVar(a:lnum, varname, function(s:pretty_printers[pretty_idx][1]))
+    let pretty_idx = str2nr(key)
+    let PrettyPrinter = function(s:pretty_printers[pretty_idx][1])
+    let indent = s:GetVariableIndent(varname, +1)
+    let Cb = function('s:ShowPrettyVar', [a:lnum, indent, PrettyPrinter])
+    call s:SendMICommand('-var-info-path-expression ' .. s:EscapeMIArgument(varname), Cb)
   else
-    let Cb = function('s:CollectVarChildren', [a:lnum])
-    return TermDebugSendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(key), Cb)
+    let Cb = function('s:HandleVarChildren', [a:lnum])
+    return s:SendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(key), Cb)
   endif
 endfunc
 
 func s:JumpCursor(lnum)
-  " Index into created marks
-  let ns = nvim_create_namespace('TermDebugConcealJump')
+  let ns = nvim_create_namespace('PromptDebugConcealJump')
   let extmarks = s:GetLineExtmarks(0, ns, a:lnum - 1)
   if empty(extmarks)
     return v:false
@@ -1025,7 +992,7 @@ func s:JumpCursor(lnum)
   let key = extmarks[0][3]['virt_text'][0][0]
   let jump_pos = str2nr(key)
   let jump_file = key[len(jump_pos):]
-  call TermDebugGoToSource()
+  call PromptDebugGoToSource()
   if expand("%:p") != jump_file
     exe "e " . fnameescape(jump_file)
   endif
@@ -1036,7 +1003,7 @@ endfunc
 
 func s:MarkCursorJump(jump_file, jump_pos, ...)
   let key = a:jump_pos .. a:jump_file
-  let ns = nvim_create_namespace('TermDebugConcealJump')
+  let ns = nvim_create_namespace('PromptDebugConcealJump')
   if a:0 > 0
     let idx = a:1
   else
@@ -1045,54 +1012,7 @@ func s:MarkCursorJump(jump_file, jump_pos, ...)
   call nvim_buf_set_extmark(s:prompt_bufnr, ns, idx, 0, #{virt_text: [[key, "EndOfBuffer"]]})
 endfunc
 
-func s:CollectVarChildren(lnum, dict)
-  if !has_key(a:dict, "children")
-    return
-  endif
-  let children = s:GetListWithKeys(a:dict, "children")
-  " Optimize output by removing indirection
-  let optimized_exps = ['public', 'private', 'protected']
-  let optimized = []
-  for child in children
-    if index(optimized_exps, child['exp']) >= 0
-      call add(optimized, child)
-    else
-      call s:ShowElided(a:lnum, child)
-    endif
-  endfor
-  for child in optimized
-    let Cb = function('s:CollectVarChildren', [a:lnum])
-    let name = child['name']
-    call TermDebugSendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(name), Cb)
-  endfor
-endfunc
-
-func s:ShowPrettyVar(lnum, varname, PrettyPrinter)
-  let indent = s:GetVariableIndent(a:varname, 1)
-  let Cb = function('s:ShowPrettyVarResolved', [a:lnum, indent, a:PrettyPrinter])
-  call TermDebugSendMICommand('-var-info-path-expression ' .. s:EscapeMIArgument(a:varname), Cb)
-endfunc
-
-func s:ShowPrettyVarResolved(lnum, indent, PrettyPrinter, resolved)
-  let fields = a:PrettyPrinter(a:resolved['path_expr'])
-  for field in reverse(fields)
-    let [recurse, name, expr] = field
-    if !recurse
-      let prefix = a:indent .. name .. " = "
-      let Cb = function('s:ShowPrettyField', [a:lnum, prefix])
-      call TermDebugSendMICommand('-data-evaluate-expression ' . s:EscapeMIArgument(expr), Cb)
-    else
-      call s:PromptAppendMessage(a:lnum, [[a:indent .. "Recursive fields are TODO", "ErrorMsg"]])
-    endif
-  endfor
-endfunc
-
-func s:ShowPrettyField(lnum, prefix, dict)
-  let value = a:dict['value']
-  call s:PromptAppendMessage(a:lnum, [[a:prefix, 'Normal'], [value, 'debugPrintValue']])
-endfunc
-
-func TermDebugPrettyPrinter(regex, func)
+func PromptDebugPrettyPrinter(regex, func)
   call add(s:pretty_printers, [a:regex, a:func])
 endfunc
 
@@ -1113,10 +1033,12 @@ func s:EndPrinting()
     call s:SendMICommandNoOutput('-var-delete ' . varname)
   endfor
   let s:vars = []
-  let ns = nvim_create_namespace('TermDebugConcealVar')
+  let ns = nvim_create_namespace('PromptDebugConcealVar')
   call nvim_buf_clear_namespace(0, ns, 0, -1)
 endfunc
 "}}}
+
+" TODO: pressing enter on frame / threads
 
 """"""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
 func s:CommOutput(msg)
@@ -1173,15 +1095,29 @@ endfunc
 func s:HandleStream(msg)
   execute printf('let msg = %s', a:msg[1:])
   let lines = split(msg, "\n", 1)
-  if exists('s:edit_win')
+  if s:floating_output
+    stopinsert
+    " Lazily open the window
+    if !exists('s:edit_win')
+      call s:OpenFloatEdit(20, 1, [])
+      augroup PromptDebugFloatEdit
+        autocmd! WinClosed * call s:DisableStream()
+      augroup END
+    endif
+    " Append message
     let bufnr = winbufnr(s:edit_win)
-    let last_line = getbufline(bufnr, '$')[0] .. lines[0]
+    let last_line = getbufoneline(bufnr, '$') .. lines[0]
     call setbufline(bufnr, '$', last_line)
     call appendbufline(bufnr, '$', lines[1:])
     " Resize float window
     let widths = map(getbufline(bufnr, 1, '$'), 'len(v:val)')
     call s:OpenFloatEdit(max(widths), len(widths))
   endif
+endfunc
+
+func s:DisableStream()
+  let s:floating_output = 0
+  call s:CloseFloatEdit()
 endfunc
 
 " Handle stopping and running message from gdb.
@@ -1205,7 +1141,7 @@ func s:HandleCursor(class, dict)
     endif
   endif
   " Gray out '(gdb)' prompt if running
-  let ns = nvim_create_namespace('TermDebugPrompt')
+  let ns = nvim_create_namespace('PromptDebugPrompt')
   call nvim_buf_clear_namespace(s:prompt_bufnr, ns, 0, -1)
   if !s:stopped
     let lines = nvim_buf_line_count(s:prompt_bufnr)
@@ -1255,24 +1191,24 @@ func s:PlaceCursorSign(dict)
 endfunc
 
 func s:PlaceSourceCursor(dict)
-  let ns = nvim_create_namespace('TermDebugPC')
+  let ns = nvim_create_namespace('PromptDebugPC')
   let filename = get(a:dict, 'fullname', '')
   let lnum = get(a:dict, 'line', '')
   if filereadable(filename) && str2nr(lnum) > 0
     let origw = win_getid()
-    call TermDebugGoToSource()
+    call PromptDebugGoToSource()
     if expand("%:p") != filename
       exe "e " . fnameescape(filename)
     endif
     exe lnum
     normal z.
     " Display a hint where we stopped
-    if s:OptionSet('termdebug_show_source')
+    if s:OptionSet('promptdebug_show_source')
       call s:PromptShowSourceLine()
     endif
     " Highlight stopped line
     call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
-    let s:pcbuf = bufnr()
+    let s:source_bufnr = bufnr()
     call win_gotoid(origw)
   else
     call s:PromptShowNormal("???\tNo source available.")
@@ -1285,36 +1221,39 @@ func s:PlaceAsmCursor(dict)
     " Reload disassembly
     let cmd = printf("-data-disassemble -a %s 0", addr)
     let Cb = function('s:HandleDisassemble', [addr])
-    call TermDebugSendMICommand(cmd, Cb)
+    call s:SendMICommand(cmd, Cb)
   endif
 endfunc
 
 func s:SelectAsmAddr(addr)
   let origw = win_getid()
-  call TermDebugGoToSource()
+  call PromptDebugGoToSource()
   if bufname() != s:asm_bufname
     exe "e " . s:asm_bufname
     call setbufvar("%", '&list', v:false)
   endif
-
   let lnum = search('^' . a:addr)
   if lnum > 0
     normal z.
-    let ns = nvim_create_namespace('TermDebugPC')
+    let ns = nvim_create_namespace('PromptDebugPC')
     call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
-    let s:pcbuf = bufnr()
+    let s:source_bufnr = bufnr()
     call win_gotoid(origw)
   endif
-
   call win_gotoid(origw)
   return lnum > 0
 endfunc
 
 func s:ClearCursorSign()
-  let ns = nvim_create_namespace('TermDebugPC')
-  if bufexists(s:pcbuf)
-    call nvim_buf_clear_namespace(s:pcbuf, ns, 0, -1)
+  let ns = nvim_create_namespace('PromptDebugPC')
+  if bufexists(s:source_bufnr)
+    call nvim_buf_clear_namespace(s:source_bufnr, ns, 0, -1)
   endif
+endfunc
+
+func s:RefreshCursorSign(frame)
+  call s:ClearCursorSign()
+  call s:PlaceCursorSign(a:frame)
 endfunc
 
 " Handle the debugged program starting to run.
@@ -1322,7 +1261,6 @@ endfunc
 func s:HandleProgramRun(dict)
   if has_key(a:dict, 'pid')
     let s:pid = a:dict['pid']
-
     " Add some logs
     call s:PromptShowNormal("Process id: " .. s:pid)
     let cmd = ['stat', '--printf=%G', '/proc/' . s:pid]
@@ -1333,10 +1271,9 @@ func s:HandleProgramRun(dict)
     call s:PromptShowNormal("Running as: " .. user)
     " This makes a huge difference visually
     call s:PromptShowNormal("")
-
     " Issue autocmds
-    if exists('#User#TermDebugRunPost') && !exists('s:program_run_once')
-      doauto <nomodeline> User TermDebugRunPost
+    if exists('#User#PromptDebugRunPost') && !exists('s:program_run_once')
+      doauto <nomodeline> User PromptDebugRunPost
       let s:program_run_once = v:true
     endif
   endif
@@ -1358,86 +1295,91 @@ func s:HandleNewBreakpoint(dict)
   if bkpt['type'] != 'breakpoint'
     return
   endif
-
   if has_key(bkpt, 'pending')
     echomsg 'Breakpoint ' . bkpt['number'] . ' (' . bkpt['pending']  . ') pending.'
     return
   endif
 
-  call s:ClearMultiBreakpointSigns(bkpt['number'], 0)
+  call s:ClearBreakpointSign(bkpt['number'], 0)
   if has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
     for location in bkpt['locations']
-      let id = location['number']
-      let s:breakpoints[id] = #{
-            \ fullname: get(location, 'fullname', location['addr']),
-            \ lnum: get(location, 'line', 1),
-            \ enabled: location['enabled'] == 'y' && bkpt['enabled'] == 'y',
-            \ parent: bkpt['number']
-            \ }
+      let id = s:AddBreakpoint(location, bkpt)
       call s:PlaceBreakpointSign(id)
     endfor
   else
-    let id = bkpt['number']
-    let s:breakpoints[id] = #{
-          \ fullname: get(bkpt, 'fullname', bkpt['addr']),
-          \ lnum: get(bkpt, 'line', 1),
-          \ enabled: bkpt['enabled'] == 'y'
-          \ }
+    let id = s:AddBreakpoint(bkpt, #{})
     call s:PlaceBreakpointSign(id)
   endif
+endfunc
+
+func s:AddBreakpoint(bkpt, parent)
+  let id = a:bkpt['number']
+  let item = #{enabled: a:bkpt['enabled'] == 'y'}
+  if has_key(a:bkpt, 'fullname')
+    let item['fullname'] = a:bkpt['fullname']
+    let item['lnum'] = a:bkpt['line']
+  endif
+  if !empty(a:parent)
+    let parent_id = a:parent['number']
+    let item['parent'] = parent_id
+    if !has_key(s:multi_brs, parent_id)
+      let s:multi_brs[parent_id] = [id]
+    else
+      call add(s:multi_brs[parent_id], id)
+    endif
+    let item['enabled'] = item['enabled'] && a:parent['enabled'] == 'y'
+  endif
+  let s:breakpoints[id] = item
+  return id
 endfunc
 
 " Handle deleting a breakpoint
 " Will remove the sign that shows the breakpoint
 func s:HandleBreakpointDelete(dict)
   let id = a:dict['id']
-  call s:ClearMultiBreakpointSigns(id, 1)
+  call s:ClearBreakpointSign(id, 1)
 endfunc
 
-func s:ClearBreakpointSign(id, was_deleted)
-  " Might be watchpoint that was deleted, so check first
-  if has_key(s:breakpoints, a:id)
+func s:ClearBreakpointSign(id, delete)
+  let ids = get(s:multi_brs, a:id, [a:id])
+  for id in ids
+    " Might be watchpoint that was deleted, so check first
+    if !has_key(s:breakpoints, a:id)
+      continue
+    endif
     let breakpoint = s:breakpoints[a:id]
     if has_key(breakpoint, "extmark")
       let extmark = breakpoint['extmark']
       let bufnr = bufnr(breakpoint['fullname'])
       if bufnr > 0
-        let ns = nvim_create_namespace('TermDebugBr')
+        let ns = nvim_create_namespace('PromptDebugBr')
         call nvim_buf_del_extmark(bufnr, ns, extmark)
       endif
     endif
-    if a:was_deleted
+    if a:delete
       unlet s:breakpoints[a:id]
     endif
-  endif
-endfunc
-
-func s:ClearMultiBreakpointSigns(id, was_deleted)
-  let brks = filter(copy(s:breakpoints), 'has_key(v:val, "parent") && v:val.parent == a:id')
-  for id in keys(brks)
-    call s:ClearBreakpointSign(id, a:was_deleted)
   endfor
-  " In case it wasn't a multi breakpoint
-  call s:ClearBreakpointSign(a:id, a:was_deleted)
 endfunc
 
 func s:PlaceBreakpointSign(id)
-  if has_key(s:breakpoints, a:id)
-    let breakpoint = s:breakpoints[a:id]
-    let bufnr = bufnr(breakpoint['fullname'])
-    let placed = has_key(breakpoint, 'extmark')
-    if bufnr > 0 && !placed
-      call bufload(bufnr)
-      let ns = nvim_create_namespace('TermDebugBr')
-      let text = has_key(breakpoint, 'parent') ? breakpoint['parent'] : a:id
-      if len(text) > 2
-        let text = "*"
-      endif
-      let hl_group = breakpoint['enabled'] ? 'debugBreakpoint' : 'debugBreakpointDisabled'
-      let opts = #{sign_text: text, sign_hl_group: hl_group}
-      let extmark = nvim_buf_set_extmark(bufnr, ns, breakpoint['lnum'] - 1, 0, opts)
-      let s:breakpoints[a:id]['extmark'] = extmark
+  let breakpoint = s:breakpoints[a:id]
+  if !has_key(breakpoint, 'fullname')
+    return
+  endif
+  let bufnr = bufnr(breakpoint['fullname'])
+  let placed = has_key(breakpoint, 'extmark')
+  if bufnr > 0 && !placed
+    call bufload(bufnr)
+    let ns = nvim_create_namespace('PromptDebugBr')
+    let text = has_key(breakpoint, 'parent') ? breakpoint['parent'] : a:id
+    if len(text) > 2
+      let text = "*"
     endif
+    let hl_group = breakpoint['enabled'] ? 'debugBreakpoint' : 'debugBreakpointDisabled'
+    let opts = #{sign_text: text, sign_hl_group: hl_group}
+    let extmark = nvim_buf_set_extmark(bufnr, ns, breakpoint['lnum'] - 1, 0, opts)
+    let s:breakpoints[a:id]['extmark'] = extmark
   endif
 endfunc
 
@@ -1639,15 +1581,74 @@ endfunc
 func s:HandleThreadSelect(dict)
   let s:selected_thread = a:dict['new-thread-id']
   let s:selected_frame = a:dict['frame']['level']
-  call s:ClearCursorSign()
-  call s:PlaceCursorSign(a:dict['frame'])
+  call s:RefreshCursorSign(a:dict['frame'])
 endfunc
 
-func s:HandleBreakpointEdit(bp, dict)
+func s:HandleThreadStack(lnum, id, dict)
+  let prefix = "/home/" .. $USER
+  let frames = s:GetListWithKeys(a:dict, 'stack')
+  for frame in frames
+    let fullname = get(frame, 'fullname', '')
+    if filereadable(fullname) && stridx(fullname, prefix) == 0
+      let msg = s:FormatFrameMessage(frame)
+      " Display thread id instead of frame id
+      let msg[0][0] = "~" .. a:id
+      call s:PromptAppendMessage(a:lnum, msg)
+      if has_key(frame, 'file') && filereadable(frame['file'])
+        call s:MarkCursorJump(frame['file'], frame['line'], a:lnum)
+      endif
+      break
+    endif
+  endfor
+endfunc
+
+func s:HandleVarChildren(lnum, dict)
+  if !has_key(a:dict, "children")
+    return
+  endif
+  let children = s:GetListWithKeys(a:dict, "children")
+  " Optimize output by removing indirection
+  let optimized_exps = ['public', 'private', 'protected']
+  let optimized = []
+  for child in reverse(children)
+    if index(optimized_exps, child['exp']) >= 0
+      call add(optimized, child)
+    else
+      call s:ShowElided(a:lnum, child)
+    endif
+  endfor
+  for child in optimized
+    let Cb = function('s:CollectVarChildren', [a:lnum])
+    let name = child['name']
+    call s:SendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(name), Cb)
+  endfor
+endfunc
+
+func s:ShowPrettyVar(lnum, indent, PrettyPrinter, resolved)
+  let fields = a:PrettyPrinter(a:resolved['path_expr'])
+  for field in reverse(fields)
+    let [recurse, name, expr] = field
+    let prefix = a:indent .. name .. " = "
+    if !recurse
+      let Cb = function('s:ShowPrettyField', [a:lnum, prefix])
+      call s:SendMICommand('-data-evaluate-expression ' . s:EscapeMIArgument(expr), Cb)
+    else
+      let items = [[prefix, 'Normal'], ["Recursive fields are TODO", "ErrorMsg"]]
+      call s:PromptAppendMessage(a:lnum, items)
+    endif
+  endfor
+endfunc
+
+func s:ShowPrettyField(lnum, prefix, dict)
+  let value = a:dict['value']
+  call s:PromptAppendMessage(a:lnum, [[a:prefix, 'Normal'], [value, 'debugPrintValue']])
+endfunc
+
+func s:HandleBreakpointCommands(bp, dict)
   let script = s:Get(a:dict, 'BreakpointTable', 'body', 'bkpt', 'script', [])
-  if !empty(script) && bufname() == s:prompt_bufname
+  if !empty(script)
     call s:OpenFloatEdit(20, len(script), script)
-    augroup TermDebugFloatEdit
+    augroup PromptDebugFloatEdit
       exe printf("autocmd! WinClosed * call s:OnEditComplete(%d)", a:bp)
     augroup END
   endif
@@ -1657,9 +1658,9 @@ func s:OnEditComplete(bp)
   let nr = winbufnr(s:edit_win)
   let commands = getbufline(nr, 1, '$')
   call s:CloseFloatEdit()
-  let commands = map(commands, {k, v -> '"' . v . '"'})
+  call map(commands, 's:EscapeMIArgument(v:val)')
   let msg = printf("-break-commands %d %s", a:bp, join(commands, " "))
-  call TermDebugSendMICommand(msg, {_ -> s:PromptShowNormal("Breakpoint commands updated")})
+  call s:SendMICommand(msg, {_ -> s:PromptShowNormal("Breakpoint commands updated")})
 endfunc
 
 func s:HandleSymbolInfo(dict)
@@ -1700,10 +1701,8 @@ func s:HandleSymbolInfo(dict)
   endif
 endfunc
 
-func s:HandleEvaluate(winid, dict)
+func s:HandleEvaluate(dict)
   let lines = split(a:dict['value'], "\n")
-  let was_win = win_getid()
-  call win_gotoid(a:winid)
   call s:OpenPreview("Value", lines)
   call s:ClosePreviewOn('CursorMoved', 'WinScrolled', 'WinResized')
 endfunc
@@ -1715,7 +1714,7 @@ func s:HandleCompletion(cmd, dict)
 
   let context = split(a:cmd, " ", 1)[-1]
   let matches = a:dict['matches']
-  call filter(matches, "stridx(v:val, a:cmd) == 0 && v:val != a:cmd")
+  call filter(matches, "stridx(v:val, a:cmd) == 0")
   call map(matches, "context .. v:val[len(a:cmd):]")
   if len(matches) == 0
     return s:EndCompletion()
@@ -1723,7 +1722,7 @@ func s:HandleCompletion(cmd, dict)
 
   call s:OpenScrollablePreview("Completion", matches)
   call s:ScrollPreview("1")
-  augroup TermDebugCompletion
+  augroup PromptDebugCompletion
     autocmd! TextChangedI <buffer> call s:OpenCompletion()
     autocmd! InsertLeave <buffer> call s:EndCompletion()
   augroup END
@@ -1736,13 +1735,9 @@ func s:EndCompletion()
   if exists('s:previous_cmd')
     unlet s:previous_cmd
   endif
-  if exists('#TermDebugCompletion')
-    au! TermDebugCompletion
+  if exists('#PromptDebugCompletion')
+    au! PromptDebugCompletion
   endif
-endfunc
-
-func s:HandleInterrupt(cmd, dict)
-  call chansend(s:gdb_job_id, a:cmd . "\n")
 endfunc
 
 func s:HandlePwd(dict)
@@ -1791,7 +1786,6 @@ endfunc
 
 func s:HandleFrameJump(level, dict)
   let frame = a:dict['frame']
-  call s:ClearCursorSign()
   call s:PlaceCursorSign(frame)
   let s:selected_frame = a:level
   call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
@@ -1820,11 +1814,9 @@ func s:HandleFrameChange(going_up, dict)
     " Switch directly
     if !empty(frames)
       call s:PromptShowMessage([["Switching to frame #" .. frames[0]['level'], "Normal"]])
-      call s:ClearCursorSign()
-      call s:PlaceCursorSign(frames[0])
+      call s:RefreshCursorSign(frames[0])
       let s:selected_frame = frames[0]['level']
-      call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
-      return
+      return s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
     endif
   else
     let prefix = "/home/" .. $USER
@@ -1832,11 +1824,9 @@ func s:HandleFrameChange(going_up, dict)
       let fullname = get(frame, 'fullname', '')
       if filereadable(fullname) && stridx(fullname, prefix) == 0
         call s:PromptShowMessage([["Switching to frame #" .. frame['level'], "Normal"]])
-        call s:ClearCursorSign()
-        call s:PlaceCursorSign(frame)
+        call s:RefreshCursorSign(frame)
         let s:selected_frame = frame['level']
-        call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
-        return
+        return s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
       endif
     endfor
   endif
@@ -1925,8 +1915,8 @@ func s:OpenFloatEdit(width, height, ...)
 endfunc
 
 func s:CloseFloatEdit()
-  if exists('#TermDebugFloatEdit')
-    au! TermDebugFloatEdit
+  if exists('#PromptDebugFloatEdit')
+    au! PromptDebugFloatEdit
   endif
   if exists('s:edit_win')
     let nr = winbufnr(s:edit_win)
@@ -2035,7 +2025,7 @@ func s:GetPreviewLine(expr)
 endfunc
 
 func s:ClosePreviewOn(...)
-  augroup TermDebugPreview
+  augroup PromptDebugPreview
     for event in a:000
       exe printf("autocmd! %s * call s:ClosePreview()", event)
     endfor
@@ -2043,8 +2033,8 @@ func s:ClosePreviewOn(...)
 endfunc
 
 func s:ClosePreview()
-  if exists('#TermDebugPreview')
-    au! TermDebugPreview
+  if exists('#PromptDebugPreview')
+    au! PromptDebugPreview
   endif
   if exists("s:preview_win")
     let nr = winbufnr(s:preview_win)
@@ -2056,16 +2046,16 @@ endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Ending the session""""""""""""""""""""""""""""{{{
-func s:EndTermDebug(job_id, exit_code, event)
-  if exists('#User#TermDebugStopPre')
-    doauto <nomodeline> User TermDebugStopPre
+func s:EndPromptDebug(job_id, exit_code, event)
+  if exists('#User#PromptDebugStopPre')
+    doauto <nomodeline> User PromptDebugStopPre
   endif
 
-  silent! autocmd! TermDebug
-  silent! autocmd! TermDebugPreview
-  silent! autocmd! TermDebugFloatEdit
-  silent! autocmd! TermDebugHistory
-  silent! autocmd! TermDebugCompletion
+  silent! autocmd! PromptDebug
+  silent! autocmd! PromptDebugPreview
+  silent! autocmd! PromptDebugFloatEdit
+  silent! autocmd! PromptDebugHistory
+  silent! autocmd! PromptDebugCompletion
 
   call s:ClosePreview()
   call s:CloseFloatEdit()
@@ -2085,8 +2075,8 @@ func s:EndTermDebug(job_id, exit_code, event)
     endif
   endfor
 
-  if exists('#User#TermDebugStopPost')
-    doauto <nomodeline> User TermDebugStopPost
+  if exists('#User#PromptDebugStopPost')
+    doauto <nomodeline> User PromptDebugStopPost
   endif
 endfunc
 
@@ -2094,7 +2084,7 @@ endfunc
 func s:BufRead()
   let fullname = expand('<afile>:p')
   for [key, breakpoint] in items(s:breakpoints)
-    if breakpoint['fullname'] == fullname
+    if has_key(breakpoint, 'fullname') && breakpoint['fullname'] == fullname
       call s:PlaceBreakpointSign(key)
     endif
   endfor
