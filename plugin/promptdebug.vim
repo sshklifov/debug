@@ -1170,12 +1170,15 @@ func s:HandleCursor(class, dict)
   endif
   " Update cursor
   call s:ClearCursorSign()
-  if s:stopped
+  if has_key(a:dict, 'frame') && s:stopped
     call s:PlaceCursorSign(a:dict['frame'])
   endif
 endfunc
 
 func s:ShowStopReason(dict)
+  " This makes a huge difference visually
+  call s:PromptShowNormal("")
+
   let reason = a:dict['reason']
   if reason == 'breakpoint-hit'
     let msg = "Breakpoint hit."
@@ -1195,12 +1198,11 @@ func s:ShowStopReason(dict)
     return s:PromptShowNormal("Process received signal: " .. a:dict['signal-name'])
   elseif reason == 'solib-event' || reason =~ 'fork' || reason =~ 'syscall' || reason == 'exec'
     let msg = "Event " .. string(reason)
+  else
+    let msg = reason
   endif
-
-  if exists('msg')
-    let items = [["Stopped", "Italic"], [", reason: " .. msg, "Normal"]]
-    call s:PromptShowMessage(items)
-  endif
+  let items = [["Stopped", "Italic"], [", reason: " .. msg, "Normal"]]
+  call s:PromptShowMessage(items)
 endfunc
 
 func s:PlaceCursorSign(dict)
@@ -1290,8 +1292,6 @@ func s:HandleProgramRun(dict)
     endif
     let user = system(cmd)
     call s:PromptShowNormal("Running as: " .. user)
-    " This makes a huge difference visually
-    call s:PromptShowNormal("")
     " Issue autocmds
     if exists('#User#PromptDebugRunPost') && !exists('s:program_run_once')
       doauto <nomodeline> User PromptDebugRunPost
