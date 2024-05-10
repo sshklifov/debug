@@ -162,6 +162,10 @@ endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Sugar"""""""""""""""""""""""""""""""""""""""""{{{
+func PromptDebugGetHistory()
+  return s:command_hist
+endfunc
+
 func PromptDebugEditCommands(...)
   if a:0 > 0 
     let br = a:1
@@ -323,8 +327,8 @@ func s:LaunchGdb()
   inoremap <buffer> <C-n> <cmd>call <SID>ScrollPreview("+1")<CR>
   inoremap <buffer> <C-p> <cmd>call <SID>ScrollPreview("-1")<CR>
   inoremap <buffer> <C-y> <cmd>call <SID>AcceptPreview()<CR>
-  inoremap <buffer> <expr> <Up> <SID>ArrowMap("-1")
-  inoremap <buffer> <expr> <Down> <SID>ArrowMap("+1")
+  inoremap <buffer> <Up> <cmd>call <SID>ArrowMap("-1")<CR>
+  inoremap <buffer> <Down> <cmd>call <SID>ArrowMap("+1")<CR>
   inoremap <buffer> <Tab> <cmd>call <SID>TabMap("+1")<CR>
   inoremap <buffer> <S-Tab> <cmd>call <SID>TabMap("-1")<CR>
   inoremap <buffer> <CR> <cmd>call <SID>EnterMap()<CR>
@@ -454,7 +458,7 @@ func s:OpenCompletion()
   let cmd = s:GetPrompt()
   let context = split(cmd, " ", 1)[-1]
   " If possible, avoid asking GDB about completions
-  if exists('s:preview_win')
+  if s:IsOpenPreview('Completion')
     let nr = nvim_win_get_buf(s:preview_win)
     if nvim_buf_line_count(nr) < s:max_completions
       if stridx(cmd, s:previous_cmd) == 0 && cmd[-1:-1] !~ '\s'
@@ -477,17 +481,20 @@ func s:OpenCompletion()
 endfunc
 
 func s:ArrowMap(expr)
-  if empty(s:command_hist)
-    return ''
+  if s:IsOpenPreview('Completion') || s:IsOpenPreview('History')
+    return s:ScrollPreview(a:expr)
   endif
-  " Quickly scroll history (no preview)
+  if empty(s:command_hist)
+    return
+  endif
+  " Quickly scroll history (no window)
   if a:expr == '-1'
     if !exists('s:command_hist_idx')
       let s:command_hist_idx = len(s:command_hist)
       call add(s:command_hist, s:GetPrompt())
       augroup PromptDebugHistory
-        autocmd! InsertLeave * call s:EndHistory()
-        autocmd! CursorMovedI * call s:EndHistory()
+        autocmd! InsertLeave * call s:EndHistory(v:false)
+        autocmd! CursorMovedI * call s:EndHistory(v:true)
       augroup END
     endif
     let s:command_hist_idx = max([s:command_hist_idx - 1, 0])
@@ -497,18 +504,22 @@ func s:ArrowMap(expr)
     endif
     let s:command_hist_idx = min([s:command_hist_idx + 1, len(s:command_hist) - 1])
   endif
-  return s:SetPromptViaKeys(s:command_hist[s:command_hist_idx])
+  return s:SetPromptViaCmd(s:command_hist[s:command_hist_idx])
 endfunc
 
-func s:EndHistory()
+func s:EndHistory(allow_drift)
   call s:ClosePreview()
-  if exists('s:command_hist_idx')
-    call remove(s:command_hist, -1)
-    unlet s:command_hist_idx
+  if !exists('s:command_hist_idx')
+    return
   endif
-  if exists('#PromptDebugHistory')
-    au! PromptDebugHistory
+  let [lhs, rhs] = s:GetPrompt(2)
+  if a:allow_drift && empty(rhs) && lhs .. rhs == s:command_hist[s:command_hist_idx]
+    " Cursor is positioned at the correct position and the command is the same.
+    return
   endif
+  call remove(s:command_hist, -1)
+  unlet s:command_hist_idx
+  au! PromptDebugHistory
 endfunc
 
 func s:AcceptPreview()
@@ -520,7 +531,7 @@ func s:AcceptPreview()
     call s:EndCompletion()
   elseif s:IsOpenPreview('History')
     call s:SetPromptViaCmd(s:GetPreviewLine('.'))
-    call s:EndHistory()
+    call s:EndHistory(v:false)
   endif
 endfunc
 
@@ -529,7 +540,7 @@ func s:EnterMap()
     return s:AcceptPreview()
   endif
 
-  call s:EndHistory()
+  call s:EndHistory(v:false)
   call s:EndCompletion()
   call s:EndPrinting()
 
