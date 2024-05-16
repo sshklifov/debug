@@ -1334,7 +1334,8 @@ func s:HandleNewBreakpoint(dict)
     return
   endif
   if has_key(bkpt, 'pending')
-    echomsg 'Breakpoint ' . bkpt['number'] . ' (' . bkpt['pending']  . ') pending.'
+    let normal = 'Breakpoint ' . bkpt['number'] . ' (' . bkpt['pending']  . ') pending.'
+    call s:PromptShowNormal(normal)
     return
   endif
 
