@@ -128,6 +128,14 @@ func s:SendMICommand(cmd, Callback)
   let s:token_counter += 1
   let s:callbacks[token] = a:Callback
   let cmd = printf("%d%s", token, a:cmd)
+  " Log command to capture buffer
+  if s:EmptyBuffer(s:capture_bufnr)
+    call setbufline(s:capture_bufnr, 1, '<--- ' .. cmd)
+  else
+    call appendbufline(s:capture_bufnr, "$", '')
+    call appendbufline(s:capture_bufnr, "$", '<--- ' .. cmd)
+  endif
+  " Send command to GDB
   call chansend(s:gdb_job_id, cmd . "\n")
 endfunc
 
@@ -379,10 +387,12 @@ endfunc
 func s:CommJoin(job_id, msgs, event)
   for msg in a:msgs
     " Append to capture buf
-    if s:EmptyBuffer(s:capture_bufnr)
-      call setbufline(s:capture_bufnr, 1, strtrans(msg))
-    else
-      call appendbufline(s:capture_bufnr, "$", strtrans(msg))
+    if !empty(msg) && msg != '(gdb) '
+      if s:EmptyBuffer(s:capture_bufnr)
+        call setbufline(s:capture_bufnr, 1, strtrans(msg))
+      else
+        call appendbufline(s:capture_bufnr, "$", strtrans(msg))
+      endif
     endif
     " Process message
     let msg = s:comm_buf .. msg
