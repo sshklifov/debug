@@ -1197,7 +1197,7 @@ func s:HandleCursor(class, dict)
 endfunc
 
 func s:ShowStopReason(dict)
-  let reason = a:dict['reason']
+  let reason = get(a:dict, 'reason', '???')
   if reason == 'function-finished' || reason == 'end-stepping-range'
     " Ignore common reasons for GDB to stop
     return
@@ -1206,7 +1206,6 @@ func s:ShowStopReason(dict)
   " This makes a huge difference visually
   call s:PromptShowNormal("")
 
-  let reason = a:dict['reason']
   if reason == 'breakpoint-hit'
     let msg = "Breakpoint hit."
   elseif reason == 'watchpoint-scope'
@@ -1644,11 +1643,12 @@ func s:HandleThreadStack(lnum, id, dict)
   for frame in frames
     let fullname = get(frame, 'fullname', '')
     if filereadable(fullname) && stridx(fullname, prefix) == 0
+      let jumpable = has_key(frame, 'file') && filereadable(frame['file'])
       let msg = s:FormatFrameMessage(frame)
       " Display thread id instead of frame id
       let msg[0][0] = "~" .. a:id
       call s:PromptAppendMessage(a:lnum, msg)
-      if has_key(frame, 'file') && filereadable(frame['file'])
+      if jumpable
         call s:MarkCursor(a:lnum, a:id, frame['level'])
       endif
       break
@@ -1822,7 +1822,7 @@ func s:HandleDisassemble(addr, dict)
   call s:SelectAsmAddr(a:addr)
 endfunc
 
-func s:FormatFrameMessage(dict)
+func s:FormatFrameMessage(jumpable, dict)
   let frame = a:dict
   let location = "???"
   if has_key(frame, 'file')
@@ -1830,7 +1830,7 @@ func s:FormatFrameMessage(dict)
   endif
   let level_item = ["#" .. frame['level'], 'debugFrameTag']
   let in_item = [" in ", 'Normal']
-  let func_item = [frame["func"], 'debugFrameFunction']
+  let func_item = [frame["func"], a:jumpable ? 'debugFrameFunction' : 'Normal']
   let addr_item = [frame["addr"], 'Normal']
   let at_item = [" at ", 'Normal']
   let loc_item = [location, 'debugFrameLocation']
@@ -1848,9 +1848,10 @@ endfunc
 func s:HandleFrameList(dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
-    let msg = s:FormatFrameMessage(frame)
+    let jumpable = has_key(frame, 'file') && filereadable(frame['file'])
+    let msg = s:FormatFrameMessage(frame, jumpable)
     call s:PromptShowMessage(msg)
-    if has_key(frame, 'file') && filereadable(frame['file'])
+    if jumpable
       call s:MarkLastCursor(frame['level'])
     endif
   endfor
