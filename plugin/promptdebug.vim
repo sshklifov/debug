@@ -1644,7 +1644,7 @@ func s:HandleThreadStack(lnum, id, dict)
     let fullname = get(frame, 'fullname', '')
     if filereadable(fullname) && stridx(fullname, prefix) == 0
       let jumpable = has_key(frame, 'file') && filereadable(frame['file'])
-      let msg = s:FormatFrameMessage(frame)
+      let msg = s:FormatFrameMessage(jumpable, frame)
       " Display thread id instead of frame id
       let msg[0][0] = "~" .. a:id
       call s:PromptAppendMessage(a:lnum, msg)
@@ -1849,7 +1849,7 @@ func s:HandleFrameList(dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
     let jumpable = has_key(frame, 'file') && filereadable(frame['file'])
-    let msg = s:FormatFrameMessage(frame, jumpable)
+    let msg = s:FormatFrameMessage(jumpable, frame)
     call s:PromptShowMessage(msg)
     if jumpable
       call s:MarkLastCursor(frame['level'])
