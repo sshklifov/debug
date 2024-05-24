@@ -264,11 +264,6 @@ func PromptDebugStart(...)
   let s:max_completions = 20
 
   call s:CreateSpecialBuffers()
-
-  augroup PromptDebug
-    autocmd! BufRead * call s:BufRead()
-  augroup END
-
   call s:LaunchGdb()
 endfunc
 
@@ -947,7 +942,7 @@ func s:ShowElided(lnum, var)
   let value = is_pretty ? "<...>" : a:var["value"]
   let indent_item = [indent, "Normal"]
   let name_item = [uiname .. " = ", "Normal"]
-  let value_item = [value, "debugPrintValue"]
+  let value_item = [empty(value) ? "???" : value, "debugPrintValue"]
   call s:PromptAppendMessage(a:lnum, [indent_item, name_item, value_item])
 
   if is_pretty || a:var['numchild'] > 0
@@ -1172,6 +1167,10 @@ func s:HandleCursor(class, dict)
     call s:ShowStopReason(a:dict)
     " Key might be missing when e.g. stopped due do signal (thread group exited)
     if has_key(a:dict, 'thread-id')
+      " Show a message that the thread has changed
+      if !exists('s:selected_thread') || s:selected_thread != a:dict['thread-id']
+        call s:PromptShowNormal("Switching to thread ~" .. a:dict['thread-id'])
+      endif
       let s:selected_thread = a:dict['thread-id']
     endif
     let s:stopped = 1
@@ -1348,7 +1347,7 @@ func s:HandleNewBreakpoint(dict)
     return
   endif
 
-  call s:ClearBreakpointSign(bkpt['number'], 0)
+  call s:ClearBreakpointSign(bkpt['number'], 1)
   if has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
     for location in bkpt['locations']
       let id = s:AddBreakpoint(location, bkpt)
@@ -1389,23 +1388,30 @@ func s:HandleBreakpointDelete(dict)
 endfunc
 
 func s:ClearBreakpointSign(id, delete)
-  let ids = get(s:multi_brs, a:id, [a:id])
+  let ns = nvim_create_namespace('PromptDebugBr')
+  if has_key(s:multi_brs, a:id)
+    let ids = s:multi_brs[a:id]
+    if a:delete
+      unlet s:multi_brs[a:id]
+    endif
+  else
+    let ids = [a:id]
+  endif
   for id in ids
     " Might be watchpoint that was deleted, so check first
-    if !has_key(s:breakpoints, a:id)
+    if !has_key(s:breakpoints, id)
       continue
     endif
-    let breakpoint = s:breakpoints[a:id]
+    let breakpoint = s:breakpoints[id]
     if has_key(breakpoint, "extmark")
       let extmark = breakpoint['extmark']
       let bufnr = bufnr(breakpoint['fullname'])
       if bufnr > 0
-        let ns = nvim_create_namespace('PromptDebugBr')
         call nvim_buf_del_extmark(bufnr, ns, extmark)
       endif
     endif
     if a:delete
-      unlet s:breakpoints[a:id]
+      unlet s:breakpoints[id]
     endif
   endfor
 endfunc
@@ -1840,6 +1846,7 @@ endfunc
 
 func s:HandleFrameJump(level, dict)
   let frame = a:dict['frame']
+  call s:ClearCursorSign()
   call s:PlaceCursorSign(frame)
   let s:selected_frame = a:level
   call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
@@ -2135,13 +2142,4 @@ func s:EndPromptDebug(job_id, exit_code, event)
   endif
 endfunc
 
-" Handle a BufRead autocommand event: place breakpoint signs.
-func s:BufRead()
-  let fullname = expand('<afile>:p')
-  for [key, breakpoint] in items(s:breakpoints)
-    if has_key(breakpoint, 'fullname') && breakpoint['fullname'] == fullname
-      call s:PlaceBreakpointSign(key)
-    endif
-  endfor
-endfunc
 " }}}
