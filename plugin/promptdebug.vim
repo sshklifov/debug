@@ -60,6 +60,15 @@ func PromptDebugGoToCapture()
   endif
 endfunc
 
+func PromptDebugGoToOutput()
+  let ids = win_findbuf(s:io_bufnr)
+  if empty(ids)
+    exe "tabnew " . s:io_bufname
+  else
+    call win_gotoid(ids[0])
+  endif
+endfunc
+
 func PromptDebugGoToSource()
   if !win_gotoid(s:sourcewin)
     below new
@@ -232,6 +241,8 @@ func PromptDebugStart(...)
   const s:capture_bufname = "Gdb capture"
   const s:asm_bufname = "Gdb disas"
   const s:prompt_bufname = "Gdb terminal"
+  const s:io_bufname = "Program output"
+  let s:bufvars = ["capture_bufname", "asm_bufname", "prompt_bufname", "io_bufname"]
   " Exceptions thrown
   const s:eval_exception = "EvalFailedException"
   " Custom pretty printers (can be expanded by user)
@@ -268,6 +279,16 @@ func PromptDebugStart(...)
 endfunc
 
 func s:LaunchGdb()
+  " Open terminal controlling inferior i/o
+  let tty = "/dev/null"
+  if !exists("s:host")
+    sp
+    setlocal nobuflisted
+    let s:tty_job_id = termopen("tail -f /dev/null", #{on_stdout: function('s:ProgramOutput')})
+    let tty = nvim_get_chan_info(s:tty_job_id)['pty']
+    quit
+  endif
+
   let gdb_cmd = [g:promptdebugger]
   " Add -quiet to avoid the intro message causing a hit-enter prompt.
   call add(gdb_cmd, '-quiet')
@@ -276,7 +297,7 @@ func s:LaunchGdb()
   " Disable pagination, it causes everything to stop
   call extend(gdb_cmd, ['-iex', 'set pagination off'])
   " Ignore inferior stdout 
-  call extend(gdb_cmd, ['-iex', 'set inferior-tty /dev/null'])
+  call extend(gdb_cmd, ['-iex', 'set inferior-tty ' .. tty])
   " Remove the (gdb) prompt
   call extend(gdb_cmd, ['-iex', 'set prompt'])
   " Limit completions for faster autocomplete
@@ -341,13 +362,17 @@ func s:LaunchGdb()
 endfunc
 
 func s:CreateSpecialBuffers()
-  let bufnames = [s:capture_bufname, s:asm_bufname, s:prompt_bufname]
-  for bufname in bufnames
+  for bufvar in s:bufvars
+    let bufname = s:[bufvar]
     let nr = bufnr(bufname)
     if nr > 0
       exe "bwipe! " . nr
     endif
     let nr = bufadd(bufname)
+    " Add a corresponding '_bufnr' variable as well for convenience
+    let number_var = substitute(bufvar, 'bufname', 'bufnr', '')
+    let s:[number_var] = nr
+
     call setbufvar(nr, "&buftype", "nofile")
     call setbufvar(nr, "&swapfile", 0)
     call setbufvar(nr, "&buflisted", 1)
@@ -356,11 +381,6 @@ func s:CreateSpecialBuffers()
     call bufload(nr)
   endfor
 
-  " Do this once now for convenience
-  let s:capture_bufnr = bufnr(s:capture_bufname)
-  let s:asm_bufnr = bufnr(s:asm_bufname)
-  let s:prompt_bufnr = bufnr(s:prompt_bufname)
-  
   " Options for asm window
   call setbufvar(s:asm_bufnr, '&ft', 'asm')
   " Options for prompt window
@@ -371,6 +391,20 @@ func s:CreateSpecialBuffers()
     call setbufvar(nr, '&smarttab', v:false)
     call setbufvar(nr, '&softtabstop', 0)
     call setbufvar(nr, '&tabstop', 8)
+  endfor
+endfunc
+
+func s:ProgramOutput(job_id, msgs, event)
+  for msg in a:msgs
+    let msg = substitute(msg, '\r\n\?$', '', 'g')
+    if empty(msg) || msg[0:1] == '&"'
+      continue
+    endif
+    if s:EmptyBuffer(s:io_bufnr)
+      call setbufline(s:io_bufnr, 1, msg)
+    else
+      call appendbufline(s:io_bufnr, "$", msg)
+    endif
   endfor
 endfunc
 
@@ -2129,13 +2163,18 @@ func s:EndPromptDebug(job_id, exit_code, event)
   endfor
 
   " Clear buffers
-  let bufnames = [s:capture_bufname, s:asm_bufname, s:prompt_bufname]
-  for bufname in bufnames
+  for bufvar in s:bufvars
+    let bufname = s:[bufvar]
     let nr = bufnr(bufname)
     if nr >= 0
       exe 'bwipe!' . nr
     endif
   endfor
+
+  " Stop dependent jobs
+  if exists('s:tty_job_id')
+    call jobstop(s:tty_job_id)
+  endif
 
   if exists('#User#PromptDebugStopPost')
     doauto <nomodeline> User PromptDebugStopPost
