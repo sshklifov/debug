@@ -14,10 +14,10 @@ endif
 hi default link debugPC CursorLine
 hi default debugBreakpoint gui=reverse guibg=red
 hi default debugBreakpointDisabled gui=reverse guibg=gray
-hi default link debugFrameFunction markdownLinkText
+hi default link debugJumpable markdownLinkText
 hi default link debugFrameLocation Normal
 hi default link debugJumpSource markdownLinkText
-hi default link debugFrameTag Italic
+hi default link debugIdentifierTag Italic
 hi default link debugExpandValue markdownLinkText
 hi default link debugPrintValue markdownCode
 
@@ -61,6 +61,10 @@ func PromptDebugGoToCapture()
 endfunc
 
 func PromptDebugGoToOutput()
+  if exists('s:host')
+    echo "TODO: No output available for remote targets"
+    return
+  endif
   let ids = win_findbuf(s:io_bufnr)
   if empty(ids)
     exe "tabnew " . s:io_bufname
@@ -331,6 +335,7 @@ func s:LaunchGdb()
   " Open the prompt window
   exe "above sp " . s:prompt_bufname
   call setbufvar(bufnr(), '&list', v:false)
+  call setbufvar(bufnr(), '&so', 0)
   call prompt_setprompt(bufnr(), '(gdb) ')
   call prompt_setcallback(bufnr(), function('s:PromptOutput'))
 
@@ -348,6 +353,7 @@ func s:LaunchGdb()
   inoremap <buffer> <C-d> <cmd>call <SID>CtrlD_Map()<CR>
   inoremap <buffer> <C-c> <cmd>call <SID>CtrlC_Map()<CR>
   inoremap <buffer> <expr> <C-w> <SID>CtrlW_Map()
+  inoremap <buffer> <expr> <C-l> "<C-o>zt"
   inoremap <buffer> <C-n> <cmd>call <SID>ScrollPreview("+1")<CR>
   inoremap <buffer> <C-p> <cmd>call <SID>ScrollPreview("-1")<CR>
   inoremap <buffer> <C-y> <cmd>call <SID>AcceptPreview()<CR>
@@ -716,8 +722,15 @@ func s:PromptOutput(cmd)
     if name->s:IsCommand("thread", 1)
       return s:ThreadCommand(args)
     endif
-    if cmd[0]->s:IsCommand("info", 3) && cmd[1]->s:IsCommand("threads", 2)
-      return s:InfoThreadsCommand(get(cmd, 2, ''))
+  endif
+
+  if s:OptionSet('promptdebug_override_info')
+    if cmd[0]->s:IsCommand("info", 3)
+      if cmd[1]->s:IsCommand("threads", 2)
+        return s:InfoThreadsCommand(get(cmd, 2, ''))
+      elseif cmd[0]->s:IsCommand("info", 3) && cmd[1]->s:IsCommand("breakpoints", 2)
+        return s:InfoBreakpointsCommand(get(cmd, 2, ''))
+      endif
     endif
   endif
 
@@ -849,6 +862,15 @@ func s:InfoThreadsCommand(id)
       let Cb = function('s:HandleThreadStack', [lnum, id])
       call s:SendMICommand('-stack-list-frames --thread ' . id, Cb)
     endfor
+  endif
+endfunc
+
+func s:InfoBreakpointsCommand(id)
+  if !empty(a:id)
+    call s:PromptShowWarning("TODO: Command does not accept arguments")
+  else
+    let Cb = function('s:HandleBreakpointTable')
+    call s:SendMICommand('-break-info', Cb)
   endif
 endfunc
 " }}}
@@ -1666,6 +1688,59 @@ endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Result handles""""""""""""""""""""""""""""""""{{{
+func s:FormatBreakpointMessage(bkpt, parent)
+  let nr = a:bkpt['number']
+  let enabled = a:bkpt['enabled'] == 'y'
+  if !empty(a:parent)
+    let enabled = enabled && a:parent['enabled'] == 'y'
+  endif
+  let jumpable = has_key(a:bkpt, 'fullname') && filereadable(a:bkpt['fullname'])
+
+  if has_key(a:bkpt, 'at')
+    let location = a:bkpt['at']
+  elseif has_key(a:bkpt, 'func')
+    let location = a:bkpt['func']
+  elseif jumpable
+    let basename = fnamemodify(a:bkpt['fullname'], ':t')
+    let location = basename .. ":" .. a:bkpt['line']
+  else
+    let location = a:bkpt['addr']
+  endif
+
+  let number_item = ["*" .. nr, 'debugIdentifierTag']
+  let in_item = [" in ", 'Normal']
+  let location_item = [location, jumpable ? 'debugJumpable' : 'Normal']
+
+  call s:PromptShowMessage([number_item, in_item, location_item])
+  if !enabled
+    let ns = nvim_create_namespace('PromptDebugHighlight')
+    let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
+    let chars = len(getbufoneline(s:prompt_bufnr, lnum))
+    let opts = #{end_col: chars, hl_group: '@markup.strikethrough'}
+    call nvim_buf_set_extmark(s:prompt_bufnr, ns, lnum - 1, 0, opts)
+  endif
+  if jumpable
+    call s:MarkLastCursor(a:bkpt['fullname'], a:bkpt['line'])
+  endif
+endfunc
+
+func s:HandleBreakpointTable(dict)
+  let table = s:GetListWithKeys(a:dict['BreakpointTable'], 'body')
+  if empty(table)
+    call s:PromptShowError("No breakpoints.")
+    return
+  endif
+  for bkpt in table
+    if has_key(bkpt, 'locations')
+      for location in bkpt['locations']
+        call s:FormatBreakpointMessage(location, bkpt)
+      endfor
+    else
+      call s:FormatBreakpointMessage(bkpt, #{})
+    endif
+  endfor
+endfunc
+
 func s:HandleThreadSelect(dict)
   let s:selected_thread = a:dict['new-thread-id']
   let s:selected_frame = a:dict['frame']['level']
@@ -1868,9 +1943,9 @@ func s:FormatFrameMessage(jumpable, dict)
   if has_key(frame, 'file')
     let location = fnamemodify(frame['file'], ":t")
   endif
-  let level_item = ["#" .. frame['level'], 'debugFrameTag']
+  let level_item = ["#" .. frame['level'], 'debugIdentifierTag']
   let in_item = [" in ", 'Normal']
-  let func_item = [frame["func"], a:jumpable ? 'debugFrameFunction' : 'Normal']
+  let func_item = [frame["func"], a:jumpable ? 'debugJumpable' : 'Normal']
   let addr_item = [frame["addr"], 'Normal']
   let at_item = [" at ", 'Normal']
   let loc_item = [location, 'debugFrameLocation']
