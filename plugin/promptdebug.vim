@@ -188,16 +188,6 @@ func PromptDebugGetHistory()
   return s:command_hist
 endfunc
 
-func PromptDebugEditCommands(...)
-  if a:0 > 0 
-    let br = a:1
-  else
-    let br = max(map(keys(s:breakpoints), "str2nr(v:val)"))
-  endif
-  let Cb = function('s:HandleBreakpointCommands', [br])
-  call s:SendMICommand("-break-info " . br, Cb)
-endfunc
-
 func PromptDebugFindSym(func)
   let cmd = '-symbol-info-functions --include-nondebug --max-results 20 --name ' . a:func
   call s:SendMICommand(cmd, function('s:HandleSymbolInfo'))
@@ -646,11 +636,6 @@ func s:PromptOutput(cmd)
     return
   endif
 
-  " Check if in command> mode
-  if prompt_getprompt(s:prompt_bufnr) =~ 'command>'
-    return s:CommandsOutput(a:cmd)
-  endif
-
   let cmd = split(a:cmd, " ")
   let name = cmd[0]
   let args = join(cmd[1:], " ")
@@ -753,34 +738,18 @@ func s:PromptOutput(cmd)
 endfunc
 
 func s:CommandsCommand(brs)
-  if empty(a:brs)
-    if empty(s:breakpoints)
-      return s:PromptShowError("No breakpoints")
-    else
-      let last_br = max(map(keys(s:breakpoints), "str2nr(v:val)"))
-      let s:prompt_commands = [last_br]
-    endif
-  else
-    for brk in a:brs
-      if !has_key(s:breakpoints, brk) && !has_key(s:multi_brs, brk)
-        return s:PromptShowError("No breakpoint number " . brk)
-      endif
-    endfor
-    let s:prompt_commands = brs
+  if len(a:brs) > 1
+    return s:PromptShowError("Expecting 1 breakpoint.")
   endif
-  call prompt_setprompt(s:prompt_bufnr, 'command> ')
+  if empty(a:brs)
+    let bp = max(map(keys(s:breakpoints), "str2nr(v:val)"))
+  else
+    let bp = a:brs[0]
+  endif
+  let Cb = function('s:HandleBreakpointCommands', [bp])
+  call s:SendMICommand("-break-info " . bp, Cb)
 endfunc
 
-func s:CommandsOutput(cmd)
-  if a:cmd == 'end'
-    let msg = printf('-break-commands %s', join(s:prompt_commands, " "))
-    call s:SendMICommandNoOutput(msg)
-    call prompt_setprompt(bufnr(), '(gdb) ')
-    unlet s:prompt_commands
-  else
-    call add(s:prompt_commands, s:EscapeMIArgument(a:cmd))
-  endif
-endfunc
 
 func s:QfSourceCommand()
   if empty(getqflist())
@@ -1231,6 +1200,16 @@ func s:HandleCursor(class, dict)
       endif
       let s:selected_thread = a:dict['thread-id']
     endif
+    " XXX: Not too pretty to put it here (or anywhere for that matter)
+    " Execute breakpoint commands
+    if get(a:dict, 'reason', '') == 'breakpoint-hit'
+      let bkpt = s:breakpoints[a:dict['bkptno']]
+      if has_key(bkpt, 'script')
+        for cmd in bkpt['script']
+          call s:PromptOutput(cmd)
+        endfor
+      endif
+    endif
     let s:stopped = 1
     let s:selected_frame = 0
   elseif a:class == 'running'
@@ -1405,7 +1384,7 @@ func s:HandleNewBreakpoint(dict)
     return
   endif
 
-  call s:ClearBreakpointSign(bkpt['number'], 1)
+  call s:ClearBreakpointSign(bkpt['number'], 0)
   if has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
     for location in bkpt['locations']
       let id = s:AddBreakpoint(location, bkpt)
@@ -1419,7 +1398,11 @@ endfunc
 
 func s:AddBreakpoint(bkpt, parent)
   let id = a:bkpt['number']
-  let item = #{enabled: a:bkpt['enabled'] == 'y'}
+  if !has_key(s:breakpoints, id)
+    let s:breakpoints[id] = #{}
+  endif
+  let item = s:breakpoints[id]
+  let item['enabled'] = a:bkpt['enabled'] == 'y'
   if has_key(a:bkpt, 'fullname')
     let item['fullname'] = a:bkpt['fullname']
     let item['lnum'] = a:bkpt['line']
@@ -1817,21 +1800,18 @@ endfunc
 
 func s:HandleBreakpointCommands(bp, dict)
   let script = s:Get(a:dict, 'BreakpointTable', 'body', 'bkpt', 'script', [])
-  if !empty(script)
-    call s:OpenFloatEdit(20, len(script), script)
-    augroup PromptDebugFloatEdit
-      exe printf("autocmd! WinClosed * call s:OnEditComplete(%d)", a:bp)
-    augroup END
-  endif
+  call s:OpenFloatEdit(30, 3, script)
+  augroup PromptDebugFloatEdit
+    exe printf("autocmd! WinClosed * call s:OnEditComplete(%d)", a:bp)
+  augroup END
 endfunc
 
 func s:OnEditComplete(bp)
   let nr = winbufnr(s:edit_win)
   let commands = getbufline(nr, 1, '$')
   call s:CloseFloatEdit()
-  call map(commands, 's:EscapeMIArgument(v:val)')
-  let msg = printf("-break-commands %d %s", a:bp, join(commands, " "))
-  call s:SendMICommand(msg, {_ -> s:PromptShowNormal("Breakpoint commands updated")})
+  let s:breakpoints[a:bp]['script'] = commands
+  call s:PromptShowNormal("Breakpoint commands updated.")
 endfunc
 
 func s:HandleSymbolInfo(dict)
