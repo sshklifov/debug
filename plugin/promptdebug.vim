@@ -11,6 +11,7 @@ if !exists('g:promptdebugger')
 endif
 
 " Highlights for sign column
+hi default link debugPrompt Bold
 hi default link debugPC CursorLine
 hi default debugBreakpoint gui=reverse guibg=red
 hi default debugBreakpointDisabled gui=reverse guibg=gray
@@ -336,6 +337,7 @@ func s:LaunchGdb()
   exe "above sp " . s:prompt_bufname
   call setbufvar(bufnr(), '&list', v:false)
   call setbufvar(bufnr(), '&so', 0)
+  call matchadd('debugPrompt', '^(gdb)')
   call prompt_setprompt(bufnr(), '(gdb) ')
   call prompt_setcallback(bufnr(), function('s:PromptOutput'))
 
