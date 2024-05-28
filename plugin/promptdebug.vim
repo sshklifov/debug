@@ -13,14 +13,13 @@ endif
 " Highlights for sign column
 hi default link debugPrompt Bold
 hi default link debugPC CursorLine
-hi default debugBreakpoint gui=reverse guibg=red
-hi default debugBreakpointDisabled gui=reverse guibg=gray
+hi default link debugBreakpoint @text.danger
+hi default link debugBreakpointDisabled @text.note
 hi default link debugJumpable markdownLinkText
-hi default link debugFrameLocation Normal
-hi default link debugJumpSource markdownLinkText
-hi default link debugIdentifierTag Italic
-hi default link debugExpandValue markdownLinkText
-hi default link debugPrintValue markdownCode
+hi default link debugExpandable markdownLinkText
+hi default link debugIdentifier Italic
+hi default link debugLocation Normal
+hi default link debugValue markdownCode
 
 """"""""""""""""""""""""""""""""Go to"""""""""""""""""""""""""""""""""""""""""{{{
 func PromptDebugGoToPC()
@@ -137,6 +136,35 @@ func PromptDebugSendCommand(cmd)
   call s:SendMICommandNoOutput(msg)
 endfunc
 
+func PromptDebugGetHistory()
+  return deepcopy(s:command_hist)
+endfunc
+
+func PromptDebugGetBreakpoints()
+  return deepcopy(s:breakpoints)
+endfunc
+
+func PromptDebugPrettyPrinter(regex, func)
+  call add(s:pretty_printers, [a:regex, a:func])
+endfunc
+
+func PromptDebugFindSym(func)
+  let cmd = '-symbol-info-functions --include-nondebug --max-results 20 --name ' . a:func
+  call s:SendMICommand(cmd, function('s:HandleSymbolInfo'))
+endfunc
+
+func PromptDebugEvaluate(what)
+  let cmd = '-data-evaluate-expression ' .. s:EscapeMIArgument(a:what)
+  let Cb = function('s:HandleEvaluate')
+  call s:SendMICommand(cmd, Cb)
+endfunc
+
+func PromptDebugPrintMICommand(cmd)
+  call s:SendMICommand(a:cmd, {dict -> nvim_echo([[string(dict), 'Normal']], 1, #{})})
+endfunc
+" }}}
+
+""""""""""""""""""""""""""""""""SendMICommand"""""""""""""""""""""""""""""""""{{{
 func s:SendMICommand(cmd, Callback)
   let token = s:token_counter
   let s:token_counter += 1
@@ -180,27 +208,6 @@ func s:SwitchAsmMode(asm_mode)
     let cmd = printf('-stack-info-frame --thread %d --frame %d', s:selected_thread, s:selected_frame)
     call s:SendMICommand(cmd, {dict -> s:PlaceCursorSign(dict['frame'])})
   endif
-endfunc
-" }}}
-
-""""""""""""""""""""""""""""""""Sugar"""""""""""""""""""""""""""""""""""""""""{{{
-func PromptDebugGetHistory()
-  return s:command_hist
-endfunc
-
-func PromptDebugFindSym(func)
-  let cmd = '-symbol-info-functions --include-nondebug --max-results 20 --name ' . a:func
-  call s:SendMICommand(cmd, function('s:HandleSymbolInfo'))
-endfunc
-
-func PromptDebugPrintMICommand(cmd)
-  call s:SendMICommand(a:cmd, {dict -> nvim_echo([[string(dict), 'Normal']], 1, #{})})
-endfunc
-
-func PromptDebugEvaluate(what)
-  let cmd = '-data-evaluate-expression ' .. s:EscapeMIArgument(a:what)
-  let Cb = function('s:HandleEvaluate')
-  call s:SendMICommand(cmd, Cb)
 endfunc
 "}}}
 
@@ -342,7 +349,7 @@ func s:LaunchGdb()
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
   augroup END
 
-  inoremap <buffer> <C-d> <cmd>call <SID>CtrlD_Map()<CR>
+  inoremap <buffer> <C-d> <cmd>call PromptDebugQuit()<CR>
   inoremap <buffer> <C-c> <cmd>call <SID>CtrlC_Map()<CR>
   inoremap <buffer> <expr> <C-w> <SID>CtrlW_Map()
   inoremap <buffer> <expr> <C-l> "<C-o>zt"
@@ -423,21 +430,21 @@ func s:CommJoin(job_id, msgs, event)
     endif
     " Process message
     let msg = s:comm_buf .. msg
-    if !empty(msg) && msg !~ "^(gdb)"
-      try
-        call s:CommOutput(msg)
-        let s:comm_buf = ""
-        if exists('s:comm_timer')
-          call timer_stop(s:comm_timer)
-          unlet s:comm_timer
-        endif
-      catch /EvalFailedException/
-        let s:comm_buf = msg
-        if !exists('s:comm_timer')
-          let s:comm_timer = timer_start(4000, function('s:CommReset'))
-        endif
-      endtry
-    endif
+    try
+      call s:CommOutput(msg)
+      let s:comm_buf = ""
+      if exists('s:comm_timer')
+        call timer_stop(s:comm_timer)
+        unlet s:comm_timer
+      endif
+    catch /EvalFailedException/
+      let s:comm_buf = msg
+      if !exists('s:comm_timer')
+        " Vim has not passed enough data in this invocation. Wait for a maximum of 4 seconds and accumulate
+        " messages
+        let s:comm_timer = timer_start(4000, function('s:CommReset'))
+      endif
+    endtry
   endfor
 endfunc
 
@@ -445,15 +452,11 @@ func s:EmptyBuffer(nr)
   return nvim_buf_line_count(a:nr) == 1 && empty(nvim_buf_get_lines(a:nr, 0, 1, v:true)[0])
 endfunc
 
-func s:CtrlD_Map()
-  call PromptDebugQuit()
-endfunc
-
 func s:CtrlC_Map()
   if PromptDebugIsStopped()
     let input = getbufline(s:prompt_bufnr, '$')[0]
     call s:PromptShowMessage([[input, "Normal"], ["^C", "Cursor"]])
-    call s:SetPromptViaCmd("")
+    call s:SetPrompt("")
   else
     " Send interrupt
     let interrupt = 2
@@ -541,7 +544,7 @@ func s:ArrowMap(expr)
     endif
     let s:command_hist_idx = min([s:command_hist_idx + 1, len(s:command_hist) - 1])
   endif
-  return s:SetPromptViaCmd(s:command_hist[s:command_hist_idx])
+  return s:SetPrompt(s:command_hist[s:command_hist_idx])
 endfunc
 
 func s:EndHistory(allow_drift)
@@ -564,10 +567,10 @@ func s:AcceptPreview()
     let completion = s:GetPreviewLine('.')
     let cmd_parts = split(s:GetPrompt(), " ", 1)
     let cmd_parts[-1] = completion
-    call s:SetPromptViaCmd(join(cmd_parts, " "))
+    call s:SetPrompt(join(cmd_parts, " "))
     call s:EndCompletion()
   elseif s:IsOpenPreview('History')
-    call s:SetPromptViaCmd(s:GetPreviewLine('.'))
+    call s:SetPrompt(s:GetPreviewLine('.'))
     call s:EndHistory(v:false)
   endif
 endfunc
@@ -586,7 +589,7 @@ func s:EnterMap()
   endif
   let cmd = s:GetPrompt()
   call s:PromptShowNormal(getline('$'))
-  call s:SetPromptViaCmd('')
+  call s:SetPrompt('')
   if cmd =~ '\S'
     " Add to history and run command
     call add(s:command_hist, cmd)
@@ -612,13 +615,8 @@ func s:GetPrompt(...)
   endif
 endfunc
 
-" Which keys need to be pressed (use for <expr> maps)
-func s:SetPromptViaKeys(cmd)
-  return "\<C-U>" .. a:cmd
-endfunc
-
 " Which commands need to be performed (use for <cmd> mads)
-func s:SetPromptViaCmd(cmd)
+func s:SetPrompt(cmd)
   let prompt = prompt_getprompt(s:prompt_bufnr)
   let line = prompt .. a:cmd
   call setbufline(s:prompt_bufnr, '$', line)
@@ -723,6 +721,7 @@ func s:PromptOutput(cmd)
 
   " Good 'ol GDB commands
   let cmd_console = '-interpreter-exec console ' . s:EscapeMIArgument(a:cmd)
+
   if name->s:IsCommand("condition", 4) || name->s:IsCommand("delete", 1) ||
         \ name->s:IsCommand("disable", 3) || name->s:IsCommand("enable", 2) ||
         \ name->s:IsCommand("break", 2) || name->s:IsCommand("tbreak", 2) ||
@@ -887,7 +886,7 @@ func s:PromptShowSourceLine()
   " Copy source line with syntax
   let text = ""
   let text_hl = ""
-  let items = [[string(lnum), "debugJumpSource"], ["\t", "Normal"]]
+  let items = [[string(lnum), "debugJumpable"], ["\t", "Normal"]]
   for idx in range(leading_spaces, len(source_line) - 1)
     let hl = synID(lnum, idx + 1, 1)->synIDattr("name")
     if hl == text_hl
@@ -969,7 +968,7 @@ func s:ShowElided(lnum, var)
   let value = is_pretty ? "<...>" : a:var["value"]
   let indent_item = [indent, "Normal"]
   let name_item = [uiname .. " = ", "Normal"]
-  let value_item = [empty(value) ? "???" : value, "debugPrintValue"]
+  let value_item = [empty(value) ? "???" : value, "debugValue"]
   call s:PromptAppendMessage(a:lnum, [indent_item, name_item, value_item])
 
   if is_pretty || a:var['numchild'] > 0
@@ -979,7 +978,7 @@ func s:ShowElided(lnum, var)
     let ns = nvim_create_namespace('PromptDebugConcealVar')
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, 0, #{virt_text: items})
     let col = len(indent_item[0]) + len(name_item[0])
-    let opts = #{end_col: col + len(value_item[0]), hl_group: 'debugExpandValue', priority: 10000}
+    let opts = #{end_col: col + len(value_item[0]), hl_group: 'debugExpandable', priority: 10000}
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, col, opts)
   endif
 endfunc
@@ -1076,10 +1075,6 @@ endfunc
 func s:MarkLastCursor(...)
   let pos = nvim_buf_line_count(s:prompt_bufnr) - 2
   return s:MarkCursor(pos, a:000)
-endfunc
-
-func PromptDebugPrettyPrinter(regex, func)
-  call add(s:pretty_printers, [a:regex, a:func])
 endfunc
 
 func s:PrettyPrinterVector(expr)
@@ -1453,6 +1448,8 @@ func s:ClearBreakpointSign(id, delete)
     endif
     if a:delete
       unlet s:breakpoints[id]
+    elseif has_key(s:breakpoints[id], 'extmark')
+      unlet s:breakpoints[id]['extmark']
     endif
   endfor
 endfunc
@@ -1673,6 +1670,23 @@ endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Result handles""""""""""""""""""""""""""""""""{{{
+func s:HandleBreakpointTable(dict)
+  let table = s:GetListWithKeys(a:dict['BreakpointTable'], 'body')
+  if empty(table)
+    call s:PromptShowError("No breakpoints.")
+    return
+  endif
+  for bkpt in table
+    if has_key(bkpt, 'locations')
+      for location in bkpt['locations']
+        call s:FormatBreakpointMessage(location, bkpt)
+      endfor
+    else
+      call s:FormatBreakpointMessage(bkpt, #{})
+    endif
+  endfor
+endfunc
+
 func s:FormatBreakpointMessage(bkpt, parent)
   let nr = a:bkpt['number']
   let enabled = a:bkpt['enabled'] == 'y'
@@ -1692,9 +1706,9 @@ func s:FormatBreakpointMessage(bkpt, parent)
     let location = a:bkpt['addr']
   endif
 
-  let number_item = ["*" .. nr, 'debugIdentifierTag']
+  let number_item = ["*" .. nr, 'debugIdentifier']
   let in_item = [" in ", 'Normal']
-  let location_item = [location, jumpable ? 'debugJumpable' : 'Normal']
+  let location_item = [location, jumpable ? 'debugJumpable' : 'debugLocation']
 
   call s:PromptShowMessage([number_item, in_item, location_item])
   if !enabled
@@ -1707,23 +1721,6 @@ func s:FormatBreakpointMessage(bkpt, parent)
   if jumpable
     call s:MarkLastCursor(a:bkpt['fullname'], a:bkpt['line'])
   endif
-endfunc
-
-func s:HandleBreakpointTable(dict)
-  let table = s:GetListWithKeys(a:dict['BreakpointTable'], 'body')
-  if empty(table)
-    call s:PromptShowError("No breakpoints.")
-    return
-  endif
-  for bkpt in table
-    if has_key(bkpt, 'locations')
-      for location in bkpt['locations']
-        call s:FormatBreakpointMessage(location, bkpt)
-      endfor
-    else
-      call s:FormatBreakpointMessage(bkpt, #{})
-    endif
-  endfor
 endfunc
 
 func s:HandleThreadSelect(dict)
@@ -1795,7 +1792,7 @@ endfunc
 
 func s:ShowPrettyField(lnum, prefix, dict)
   let value = a:dict['value']
-  call s:PromptAppendMessage(a:lnum, [[a:prefix, 'Normal'], [value, 'debugPrintValue']])
+  call s:PromptAppendMessage(a:lnum, [[a:prefix, 'Normal'], [value, 'debugValue']])
 endfunc
 
 func s:HandleBreakpointCommands(bp, dict)
@@ -1925,12 +1922,12 @@ func s:FormatFrameMessage(jumpable, dict)
   if has_key(frame, 'file')
     let location = fnamemodify(frame['file'], ":t")
   endif
-  let level_item = ["#" .. frame['level'], 'debugIdentifierTag']
+  let level_item = ["#" .. frame['level'], 'debugIdentifier']
   let in_item = [" in ", 'Normal']
   let func_item = [frame["func"], a:jumpable ? 'debugJumpable' : 'Normal']
   let addr_item = [frame["addr"], 'Normal']
   let at_item = [" at ", 'Normal']
-  let loc_item = [location, 'debugFrameLocation']
+  let loc_item = [location, 'debugLocation']
   let where_item = (func_item[0] == "??" ? addr_item : func_item)
   return [level_item, in_item, where_item, at_item, loc_item]
 endfunc
