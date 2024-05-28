@@ -5,10 +5,34 @@ if exists('*PromptDebugStart')
   finish
 endif
 
-" Name of the gdb command, defaults to 'gdb'.
-if !exists('g:promptdebugger')
-  let g:promptdebugger = 'gdb'
-endif
+""""""""""""""""""""""""""""""""Options"""""""""""""""""""""""""""""""""""""""{{{
+func s:DefineOption(name, def)
+  if !exists(a:name)
+    if type(a:def) == v:t_number
+      exe printf("let %s = %d", a:name, a:def)
+    else
+      exe printf("let %s = %s", a:name, string(a:def))
+    endif
+  endif
+endfunc
+
+" Name of the gdb command
+call s:DefineOption('g:promptdebugger', 'gdb')
+
+" Whether :commands should be installed
+call s:DefineOption('g:promptdebug_commands', 1)
+
+" Custom handling of gdb commands
+call s:DefineOption('g:promptdebug_override_finish_and_return', 1)
+call s:DefineOption('g:promptdebug_override_up_and_down', 1)
+call s:DefineOption('g:promptdebug_override_s_and_n', 1)
+call s:DefineOption('g:promptdebug_override_p', 1)
+call s:DefineOption('g:promptdebug_override_f_and_bt', 1)
+call s:DefineOption('g:promptdebug_override_t', 1)
+call s:DefineOption('g:promptdebug_override_info', 1)
+
+" Display source lines when program stops
+call s:DefineOption('g:promptdebug_show_source', 1)
 
 " Highlights for sign column
 hi default link debugPrompt Bold
@@ -20,6 +44,7 @@ hi default link debugExpandable markdownLinkText
 hi default link debugIdentifier Italic
 hi default link debugLocation Normal
 hi default link debugValue markdownCode
+"}}}
 
 """"""""""""""""""""""""""""""""Go to"""""""""""""""""""""""""""""""""""""""""{{{
 func PromptDebugGoToPC()
@@ -214,10 +239,6 @@ endfunc
 """"""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""""{{{
 let s:command_hist = []
 
-func s:OptionSet(name)
-  return get(g:, a:name, v:false)
-endfunc
-
 func PromptDebugStart(...)
   if PromptDebugIsOpen()
     echo 'Terminal debugger already running, cannot run two'
@@ -285,6 +306,7 @@ func s:LaunchGdb()
   let tty = "/dev/null"
   if !exists("s:host")
     sp
+    enew
     setlocal nobuflisted
     let s:tty_job_id = termopen("tail -f /dev/null", #{on_stdout: function('s:ProgramOutput')})
     let tty = nvim_get_chan_info(s:tty_job_id)['pty']
@@ -304,8 +326,9 @@ func s:LaunchGdb()
   call extend(gdb_cmd, ['-iex', 'set prompt'])
   " Limit completions for faster autocomplete
   call extend(gdb_cmd, ['-iex', 'set max-completions ' . s:max_completions])
-  " Do not open a shell to run inferior
-  call extend(gdb_cmd, ['-iex', 'set startup-with-shell off'])
+  " Disable shell on remote where support might be limited
+  let use_shell = exists("s:host") ? "off" : "on"
+  call extend(gdb_cmd, ['-iex', 'set startup-with-shell ' .. use_shell])
   " Launch GDB through ssh
   if exists("s:host")
     let gdb_str = join(map(gdb_cmd, 'shellescape(v:val)'), ' ')
@@ -615,13 +638,124 @@ func s:GetPrompt(...)
   endif
 endfunc
 
-" Which commands need to be performed (use for <cmd> mads)
 func s:SetPrompt(cmd)
   let prompt = prompt_getprompt(s:prompt_bufnr)
   let line = prompt .. a:cmd
   call setbufline(s:prompt_bufnr, '$', line)
   call cursor('$', len(line) + 1)
 endfunc
+" }}}
+
+""""""""""""""""""""""""""""""""PromptDebugStart""""""""""""""""""""""""""""""{{{
+function! s:CmdlineCompl(ArgLead, CmdLine, CursorPos)
+  if a:CursorPos < len(a:CmdLine)
+    return []
+  endif
+  let parts = split(a:CmdLine, '\s', 1)
+  if len(parts) == 2
+    " Exe completion
+    let pat = ".*" . a:ArgLead . ".*"
+    let cmd = ["find", ".", "(", "-path", "**/.git", "-prune", "-false", "-o", "-regex", pat, ")"]
+    let cmd += ["-type", "f", "-executable", "-printf", "%P\n"]
+    let compl = systemlist(cmd)
+    return v:shell_error ? [] : compl
+  elseif get(parts, -2, '') == '<'
+    " Filename completion
+    let root = fnamemodify(a:ArgLead, ':h')
+    let cmd_pre = printf('find %s -maxdepth 1 -mindepth 1', root)
+    if fnamemodify(a:ArgLead, ':t') == a:ArgLead
+      let cmd_post = '-printf "%P\n"'
+    else
+      let cmd_post = ''
+    endif
+    let dirs = systemlist(cmd_pre .. " -type d " .. cmd_post)
+    if v:shell_error
+      return []
+    endif
+    let dirs = map(dirs, 'v:val .. "/"')
+    let files = systemlist(cmd_pre .. " -type f " .. cmd_post)
+    if v:shell_error
+      return []
+    endif
+    return filter(dirs + files, 'stridx(v:val, a:ArgLead) == 0')
+  endif
+  return []
+endfunction
+
+func s:StartOrRun(start_or_run, cmdline)
+  let cmd_args = split(a:cmdline, '\s')
+  if len(cmd_args) >= 1
+    call PromptDebugSendCommand("file " .. cmd_args[0])
+    let start_or_run = printf("%s %s", a:start_or_run, join(cmd_args[1:]))
+    call PromptDebugSendCommand(start_or_run)
+  endif
+endfunc
+
+func s:StartLocally(str_args)
+  call PromptDebugStart()
+  call s:StartOrRun('start', a:str_args)
+endfunc
+
+func s:RunLocally(str_args)
+  let filename = expand("%:t")
+  let lnum = line('.')
+
+  call PromptDebugStart()
+  " Add a breakpoint with the current cursor position
+  if !empty(filename)
+    let br = printf("tbr %s:%d", filename, lnum)
+    call PromptDebugSendCommand(br)
+  endif
+  call s:StartOrRun('run', a:str_args)
+endfunc
+
+function! s:AttachCompl(ArgLead, CmdLine, CursorPos)
+  if a:CursorPos < len(a:CmdLine)
+    return []
+  endif
+  if len(split(a:CmdLine, '\s', 1)) > 2
+    return []
+  endif
+
+  let cmdlines = systemlist(["ps", "h", "-U", $USER, "-o", "command"])
+  let compl = []
+  for cmdline in cmdlines
+    let name = split(cmdline, " ")[0]
+    if executable(name) && stridx(name, a:ArgLead) >= 0
+      call add(compl, name)
+    endif
+  endfor
+  let compl = uniq(sort(compl))
+  return compl
+endfunction
+
+func s:AttachLocally(proc)
+  " Resolve to pid
+  if str2nr(a:proc) != 0
+    let pid = a:proc
+  else
+    let pids = systemlist(["pgrep", "-f", a:proc])
+    if len(pids) == 0
+      echo "No processes found"
+      return
+    elseif len(pids) > 1
+      echo "Multiple processes found, specify pid"
+      return
+    endif
+    let pid = pids[0]
+  endif
+  call PromptDebugStart()
+  call PromptDebugSendCommand("attach " .. pid)
+endfunc
+
+if g:promptdebug_commands
+  command -nargs=? -complete=customlist,s:CmdlineCompl PromptDebugStart call s:StartLocally(<q-args>)
+  command -nargs=? -complete=customlist,s:CmdlineCompl PromptDebugRun call s:RunLocally(<q-args>)
+  command -nargs=? -complete=customlist,s:AttachCompl PromptDebugAttach call s:AttachLocally(<q-args>)
+  command -nargs=0 Source call PromptDebugGoToSource()
+  command -nargs=0 Gdb call PromptDebugGoToGdb()
+  command -nargs=0 Output call PromptDebugGoToOutput()
+endif
 " }}}
 
 """"""""""""""""""""""""""""""""Custom commands"""""""""""""""""""""""""""""""{{{
@@ -660,21 +794,21 @@ func s:PromptOutput(cmd)
   endif
 
   " Overriding GDB commands
-  if s:OptionSet('promptdebug_override_finish_and_return')
+  if g:promptdebug_override_finish_and_return
     if name->s:IsCommand("finish", 3)
       return s:FinishCommand()
     elseif name->s:IsCommand("return", 3)
       return s:ReturnCommand()
     endif
   endif
-  if s:OptionSet('promptdebug_override_up_and_down')
+  if g:promptdebug_override_up_and_down
     if name == "up"
       return s:UpCommand()
     elseif name == "down"
       return s:DownCommand()
     endif
   endif
-  if s:OptionSet('promptdebug_override_s_and_n')
+  if g:promptdebug_override_s_and_n
     if name == "asm"
       return s:AsmCommand()
     elseif name == "si" || name == "stepi"
@@ -691,25 +825,25 @@ func s:PromptOutput(cmd)
       return s:SendMICommandNoOutput('-exec-next')
     endif
   endif
-  if s:OptionSet('promptdebug_override_p')
+  if g:promptdebug_override_p
     if name == "p" || name == "print"
       return s:PrintCommand(args)
     endif
   endif
-  if s:OptionSet('promptdebug_override_f_and_bt')
+  if g:promptdebug_override_f_and_bt
     if name->s:IsCommand("frame", 1)
       return s:FrameCommand(args)
     elseif name == "bt" || name->s:IsCommand("backtrace", 1)
       return s:BacktraceCommand(args)
     endif
   endif
-  if s:OptionSet('promptdebug_override_t')
+  if g:promptdebug_override_t
     if name->s:IsCommand("thread", 1)
       return s:ThreadCommand(args)
     endif
   endif
 
-  if s:OptionSet('promptdebug_override_info')
+  if g:promptdebug_override_info
     if cmd[0]->s:IsCommand("info", 3)
       if cmd[1]->s:IsCommand("threads", 2)
         return s:InfoThreadsCommand(get(cmd, 2, ''))
@@ -1283,7 +1417,7 @@ func s:PlaceSourceCursor(dict)
     exe lnum
     normal z.
     " Display a hint where we stopped
-    if s:OptionSet('promptdebug_show_source')
+    if g:promptdebug_show_source
       call s:PromptShowSourceLine()
     endif
     " Highlight stopped line
@@ -1348,7 +1482,9 @@ func s:HandleProgramRun(dict)
       let cmd = ["ssh", s:host, join(cmd, ' ')]
     endif
     let user = system(cmd)
-    call s:PromptShowNormal("Running as: " .. user)
+    if !v:shell_error
+      call s:PromptShowNormal("Running as: " .. user)
+    endif
     " Issue autocmds
     if exists('#User#PromptDebugRunPost') && !exists('s:program_run_once')
       doauto <nomodeline> User PromptDebugRunPost
@@ -2227,7 +2363,12 @@ func s:EndPromptDebug(job_id, exit_code, event)
 
   " Stop dependent jobs
   if exists('s:tty_job_id')
+    let buffer = get(nvim_get_chan_info(s:tty_job_id), 'buffer', -1)
     call jobstop(s:tty_job_id)
+    call jobwait([s:tty_job_id])
+    if buffer >= 0
+      exe "bwipe! " . buffer
+    endif
   endif
 
   if exists('#User#PromptDebugStopPost')
