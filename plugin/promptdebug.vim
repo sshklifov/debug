@@ -169,6 +169,10 @@ func PromptDebugGetBreakpoints()
   return deepcopy(s:breakpoints)
 endfunc
 
+func PromptDebugGetState()
+  return s:
+endfunc
+
 func PromptDebugPrettyPrinter(regex, func)
   call add(s:pretty_printers, [a:regex, a:func])
 endfunc
@@ -242,11 +246,11 @@ let s:command_hist = []
 func PromptDebugStart(...)
   if PromptDebugIsOpen()
     echo 'Terminal debugger already running, cannot run two'
-    return
+    return v:false
   endif
   if !executable(g:promptdebugger)
     echo 'Cannot execute debugger program "' .. g:promptdebugger .. '"'
-    return
+    return v:false
   endif
 
   if exists('#User#PromptDebugStartPre')
@@ -298,7 +302,7 @@ func PromptDebugStart(...)
   let s:max_completions = 20
 
   call s:CreateSpecialBuffers()
-  call s:LaunchGdb()
+  return s:LaunchGdb()
 endfunc
 
 func s:LaunchGdb()
@@ -347,10 +351,10 @@ func s:LaunchGdb()
         \ })
   if s:gdb_job_id == 0
     echo 'Invalid argument (or job table is full) while opening gdb terminal window'
-    return
+    return v:false
   elseif s:gdb_job_id == -1
     echo 'Failed to open the gdb terminal window'
-    return
+    return v:false
   endif
 
   " Open the prompt window
@@ -387,6 +391,7 @@ func s:LaunchGdb()
   nnoremap <buffer> <CR> <cmd>call <SID>ExpandCursor(line('.'))<CR>
 
   startinsert
+  return v:true
 endfunc
 
 func s:CreateSpecialBuffers()
@@ -683,11 +688,12 @@ function! s:CmdlineCompl(ArgLead, CmdLine, CursorPos)
 endfunction
 
 func s:StartLocally(str_args)
-  call PromptDebugStart()
-  let cmd_args = split(a:str_args, '\s')
-  if len(cmd_args) >= 1
-    call PromptDebugSendCommand("file " .. cmd_args[0])
-    call PromptDebugSendCommand("start " .. join(cmd_args[1:]))
+  if PromptDebugStart()
+    let cmd_args = split(a:str_args, '\s')
+    if len(cmd_args) >= 1
+      call PromptDebugSendCommand("file " .. cmd_args[0])
+      call PromptDebugSendCommand("start " .. join(cmd_args[1:]))
+    endif
   endif
 endfunc
 
@@ -695,7 +701,9 @@ func s:RunLocally(str_args)
   let filename = expand("%:t")
   let lnum = line('.')
 
-  call PromptDebugStart()
+  if !PromptDebugStart()
+    return
+  endif
   let cmd_args = split(a:str_args, '\s')
   if len(cmd_args) <= 0
     return
