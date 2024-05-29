@@ -682,18 +682,13 @@ function! s:CmdlineCompl(ArgLead, CmdLine, CursorPos)
   return []
 endfunction
 
-func s:StartOrRun(start_or_run, cmdline)
-  let cmd_args = split(a:cmdline, '\s')
-  if len(cmd_args) >= 1
-    call PromptDebugSendCommand("file " .. cmd_args[0])
-    let start_or_run = printf("%s %s", a:start_or_run, join(cmd_args[1:]))
-    call PromptDebugSendCommand(start_or_run)
-  endif
-endfunc
-
 func s:StartLocally(str_args)
   call PromptDebugStart()
-  call s:StartOrRun('start', a:str_args)
+  let cmd_args = split(a:str_args, '\s')
+  if len(cmd_args) >= 1
+    call PromptDebugSendCommand("file " .. cmd_args[0])
+    call PromptDebugSendCommand("start " .. join(cmd_args[1:]))
+  endif
 endfunc
 
 func s:RunLocally(str_args)
@@ -701,12 +696,17 @@ func s:RunLocally(str_args)
   let lnum = line('.')
 
   call PromptDebugStart()
+  let cmd_args = split(a:str_args, '\s')
+  if len(cmd_args) <= 0
+    return
+  endif
+  call PromptDebugSendCommand("file " .. cmd_args[0])
   " Add a breakpoint with the current cursor position
   if !empty(filename)
     let br = printf("tbr %s:%d", filename, lnum)
     call PromptDebugSendCommand(br)
   endif
-  call s:StartOrRun('run', a:str_args)
+  call PromptDebugSendCommand("run " .. join(cmd_args[1:]))
 endfunc
 
 function! s:AttachCompl(ArgLead, CmdLine, CursorPos)
