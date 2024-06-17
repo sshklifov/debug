@@ -887,8 +887,12 @@ func s:CommandsCommand(brs)
   else
     let bp = a:brs[0]
   endif
-  let Cb = function('s:HandleBreakpointCommands', [bp])
-  call s:SendMICommand("-break-info " . bp, Cb)
+  if !has_key(s:breakpoints, bp)
+    call s:PromptShowError("Cannot set commands for breakpoint " .. bp)
+  else
+    let Cb = function('s:HandleBreakpointCommands', [bp])
+    call s:SendMICommand("-break-info " . bp, Cb)
+  endif
 endfunc
 
 
@@ -1340,11 +1344,14 @@ func s:HandleCursor(class, dict)
     " XXX: Not too pretty to put it here (or anywhere for that matter)
     " Execute breakpoint commands
     if get(a:dict, 'reason', '') == 'breakpoint-hit'
-      let bkpt = s:breakpoints[a:dict['bkptno']]
-      if has_key(bkpt, 'script')
-        for cmd in bkpt['script']
-          call s:PromptOutput(cmd)
-        endfor
+      let bkptno = a:dict['bkptno']
+      if has_key(s:breakpoints, bkptno)
+        let bkpt = s:breakpoints[bkptno]
+        if has_key(bkpt, 'script')
+          for cmd in bkpt['script']
+            call s:PromptOutput(cmd)
+          endfor
+        endif
       endif
     endif
     let s:stopped = 1
