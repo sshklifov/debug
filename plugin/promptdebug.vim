@@ -274,11 +274,12 @@ func PromptDebugStart(...)
   const s:eval_exception = "EvalFailedException"
   " Custom pretty printers (can be expanded by user)
   let s:pretty_printers = [
-        \ ['std::vector', "s:PrettyPrinterVector"],
-        \ ['std::string', "s:PrettyPrinterString"],
+        \ ['std::vector', 's:PrettyPrinterVector'],
+        \ ['std::string', 's:PrettyPrinterString'],
+        \ ['std::optional', 's:PrettyPrinterOptional']
         \ ]
   " Set defaults for required variables
-  let s:vars = []
+  let s:vars = #{}
   let s:thread_ids = #{}
   let s:breakpoints = #{}
   let s:multi_brs = #{}
@@ -1073,7 +1074,7 @@ func s:PromptShowSourceLine()
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, prompt_lnum, start_col, opts)
   endfor
   " Mark for jumping
-  call s:MarkLastCursor(expand("%:p"), lnum)
+  call s:ConcealJump(expand("%:p"), lnum)
 endfunc
 
 func s:GetLineExtmarks(b, ns, idx)
@@ -1082,70 +1083,85 @@ func s:GetLineExtmarks(b, ns, idx)
 endfunc
 
 func s:PrintCommand(expr)
-  let Cb = function('s:ShowValue', [a:expr])
+  let Cb = function('s:ShowVar', [a:expr])
   call s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(a:expr), Cb)
 endfunc
 
-func s:ShowValue(expr, dict)
-  let var = a:dict
-  call add(s:vars, var['name'])
-  let var['exp'] = a:expr
-  let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
-  call s:ShowElided(lnum, var)
-endfunc
-
-func s:ShowElided(lnum, var)
-  let name = a:var['name']
-  let is_pretty = v:false
-  if has_key(a:var, 'type')
-    let type = a:var['type']
-    for idx in range(len(s:pretty_printers))
-      let printer = s:pretty_printers[idx]
-      if type =~# printer[0]
-        let pretty_idx = idx
-        let is_pretty = v:true
-        break
+func s:FindPrettyPrinter(dict)
+  if has_key(a:dict, 'type')
+    let type = a:dict['type']
+    for [pat, printer] in s:pretty_printers
+      if type =~# pat
+        return printer
       endif
     endfor
   endif
+  return ""
+endfunc
 
-  let indent = s:GetVariableIndent(name)
-  let uiname = a:var['exp']
-  let value = is_pretty ? "<...>" : a:var["value"]
+func s:ShowVarAt(lnum, nesting, display_name, dict)
+  const pretty_fun = s:FindPrettyPrinter(a:dict)
+  let new_var = #{}
+  let new_var['pretty_fun'] = pretty_fun
+  if !empty(pretty_fun)
+    let new_var["value"] = "<...>"
+  else
+    let value = get(a:dict, "value", "")
+    if empty(value)
+      let value = "???"
+    endif
+    let new_var["value"] = value
+  endif
+
+  let new_var['expandable'] = !empty(pretty_fun) || a:dict['numchild'] > 0
+  let new_var['nesting'] = a:nesting
+  let new_var['display_name'] = a:display_name
+  let new_var['created'] = !has_key(a:dict, 'exp')
+  let new_var['gdb_handle'] = a:dict['name']
+
+  let s:vars[new_var['gdb_handle']] = new_var
+
+  call s:ShowElided(a:lnum, new_var)
+endfunc
+
+func s:ShowVar(display_name, dict)
+  let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
+  call s:ShowVarAt(lnum, 0, a:display_name, a:dict)
+endfunc
+
+func s:ShowElided(lnum, var)
+  let width = getbufvar(s:prompt_bufnr, '&sw')
+  let indent = repeat(" ", a:var['nesting'] * width)
+
   let indent_item = [indent, "Normal"]
-  let name_item = [uiname .. " = ", "Normal"]
-  let value_item = [empty(value) ? "???" : value, "debugValue"]
+  let name_item = [a:var['display_name'] .. " = ", "Normal"]
+  let value_item = [a:var['value'], "debugValue"]
   call s:PromptAppendMessage(a:lnum, [indent_item, name_item, value_item])
 
-  if is_pretty || a:var['numchild'] > 0
-    " Mark the variable
-    let items = is_pretty ? [name, string(pretty_idx)] : [name]
-    call map(items, '[v:val, "EndOfBuffer"]')
+  " Mark the variable
+  if a:var['expandable']
+    let items = [[a:var['gdb_handle'], 'EndOfBuffer']]
     let ns = nvim_create_namespace('PromptDebugConcealVar')
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, 0, #{virt_text: items})
+    " Highlight 'value_item' as debugExpandable
     let col = len(indent_item[0]) + len(name_item[0])
-    let opts = #{end_col: col + len(value_item[0]), hl_group: 'debugExpandable', priority: 10000}
+    let end_col = col + len(value_item[0])
+    let opts = #{end_col: end_col, hl_group: 'debugExpandable', priority: 10000}
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, col, opts)
   endif
 endfunc
 
-func s:GetVariableIndent(varname, ...)
-  let parts = split(a:varname, '\.')
-  let ignored = ["protected", "private", "public"]
-  call filter(parts, "index(ignored, v:val) < 0")
-  let level = len(parts) - 1
-  if a:0 > 0
-    let level += a:1
-  endif
-  let width = getbufvar(s:prompt_bufnr, '&sw')
-  return repeat(" ", level * width)
+func s:ShowEvaluation(lnum, nesting, name, dict)
+  let fake_var = #{
+        \ nesting: a:nesting,
+        \ display_name: a:name,
+        \ value: a:dict['value'],
+        \ expandable: v:false
+        \ }
+  call s:ShowElided(a:lnum, fake_var)
 endfunc
 
 " Perform an action based on a hidden string message at line
-" - If the mark starts with an alpha character, the mark is a name of a variable that
-" should be expanded.
-" - Instead, it will start with digits followed by a non-digit character. This is either
-" a location (line number + filename) or a pretty printer index + variable
 func s:ExpandCursor(lnum)
   " Is it a location tag that should be jumped to?
   if s:JumpCursor(a:lnum)
@@ -1158,19 +1174,19 @@ func s:ExpandCursor(lnum)
   if empty(virt_extmark)
     return
   endif
-  let keys = map(extmarks[0][3]['virt_text'], 'v:val[0]')
+  " Find variable based on concealed string.
+  let varname = map(extmarks[0][3]['virt_text'], 'v:val[0]')[0]
+  let var = s:vars[varname]
   " Remove highlights to signal that the link is inactive
   call map(extmarks, 'nvim_buf_del_extmark(0, ns, v:val[0])')
-  " Perform action based on key
-  if len(keys) == 2
-    let varname = keys[0]
-    let printer = s:pretty_printers[keys[1]][1]
-    let indent = s:GetVariableIndent(varname, +1)
-    let Cb = function('s:ShowPrettyVar', [a:lnum, indent, printer])
+  if empty(var['pretty_fun'])
+    " Regular printing, fetch the children and print them recursively.
+    let Cb = function('s:HandleVarChildren', [a:lnum, var])
+    return s:SendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(varname), Cb)
+  else
+    " Pretty printing, evaluate custom expressions based on printer.
+    let Cb = function('s:ShowPrettyVar', [a:lnum, var])
     call s:SendMICommand('-var-info-path-expression ' .. s:EscapeMIArgument(varname), Cb)
-  elseif len(keys) == 1
-    let Cb = function('s:HandleVarChildren', [a:lnum])
-    return s:SendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(keys[0]), Cb)
   endif
 endfunc
 
@@ -1206,7 +1222,7 @@ func s:JumpCursor(lnum)
   return v:true
 endfunc
 
-func s:MarkCursor(pos, ...)
+func s:ConcealJumpAt(pos, ...)
   let ns = nvim_create_namespace('PromptDebugConcealJump')
   if a:0 > 0 && type(a:1) == v:t_list
     let items = copy(a:1)
@@ -1218,9 +1234,9 @@ func s:MarkCursor(pos, ...)
   call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:pos, 0, #{virt_text: items})
 endfunc
 
-func s:MarkLastCursor(...)
+func s:ConcealJump(...)
   let pos = nvim_buf_line_count(s:prompt_bufnr) - 2
-  return s:MarkCursor(pos, a:000)
+  return s:ConcealJumpAt(pos, a:000)
 endfunc
 
 func s:PrettyPrinterVector(expr)
@@ -1235,11 +1251,20 @@ func s:PrettyPrinterString(expr)
   return [[0, 'string', str_expr], [0, 'length', length_expr]]
 endfunc
 
+func s:PrettyPrinterOptional(expr)
+  let has_value_expr = printf('%s._M_payload._M_engaged', a:expr)
+  let value_expr = printf('%s._M_payload._M_payload._M_value', a:expr)
+  return [[0, 'has_value', has_value_expr], [1, 'value', value_expr]]
+endfunc
+
 func s:EndPrinting()
-  for varname in s:vars
-    call s:SendMICommandNoOutput('-var-delete ' . varname)
+  for var in values(s:vars)
+    if var['created']
+      call s:SendMICommandNoOutput('-var-delete ' . var['gdb_handle'])
+    endif
   endfor
-  let s:vars = []
+  let s:vars = #{}
+  " Disable expansion of all variables
   let ns = nvim_create_namespace('PromptDebugConcealVar')
   call nvim_buf_clear_namespace(0, ns, 0, -1)
 endfunc
@@ -1870,7 +1895,7 @@ func s:FormatBreakpointMessage(bkpt, parent)
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, lnum - 1, 0, opts)
   endif
   if jumpable
-    call s:MarkLastCursor(a:bkpt['fullname'], a:bkpt['line'])
+    call s:ConcealJump(a:bkpt['fullname'], a:bkpt['line'])
   endif
 endfunc
 
@@ -1897,17 +1922,18 @@ func s:HandleThreadStack(lnum, id, dict)
       let msg[0][0] = "~" .. a:id
       call s:PromptAppendMessage(a:lnum, msg)
       if jumpable
-        call s:MarkCursor(a:lnum, a:id, frame['level'])
+        call s:ConcealJumpAt(a:lnum, a:id, frame['level'])
       endif
       break
     endif
   endfor
 endfunc
 
-func s:HandleVarChildren(lnum, dict)
+func s:HandleVarChildren(lnum, parent_var, dict)
   if !has_key(a:dict, "children")
     return
   endif
+  let nesting = a:parent_var['nesting'] + 1
   let children = s:GetListWithKeys(a:dict, "children")
   " Optimize output by removing indirection
   let optimized_exps = ['public', 'private', 'protected']
@@ -1916,34 +1942,31 @@ func s:HandleVarChildren(lnum, dict)
     if index(optimized_exps, child['exp']) >= 0
       call add(optimized, child)
     else
-      call s:ShowElided(a:lnum, child)
+      let display_name = child['exp']
+      call s:ShowVarAt(a:lnum, nesting, display_name, child)
     endif
   endfor
   for child in optimized
-    let Cb = function('s:HandleVarChildren', [a:lnum])
+    let Cb = function('s:HandleVarChildren', [a:lnum, a:parent_var])
     let name = child['name']
     call s:SendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(name), Cb)
   endfor
 endfunc
 
-func s:ShowPrettyVar(lnum, indent, printer, resolved)
-  let fields = function(a:printer)(a:resolved['path_expr'])
+func s:ShowPrettyVar(lnum, var, dict)
+  let nesting = a:var['nesting'] + 1
+  let pretty_fun = a:var['pretty_fun']
+  let fields = function(pretty_fun)(a:dict['path_expr'])
   for field in reverse(fields)
     let [recurse, name, expr] = field
-    let prefix = a:indent .. name .. " = "
     if !recurse
-      let Cb = function('s:ShowPrettyField', [a:lnum, prefix])
+      let Cb = function('s:ShowEvaluation', [a:lnum, nesting, name])
       call s:SendMICommand('-data-evaluate-expression ' . s:EscapeMIArgument(expr), Cb)
     else
-      let items = [[prefix, 'Normal'], ["Recursive fields are TODO", "ErrorMsg"]]
-      call s:PromptAppendMessage(a:lnum, items)
+      let Cb = function('s:ShowVarAt', [a:lnum, nesting, name])
+      call s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(expr), Cb)
     endif
   endfor
-endfunc
-
-func s:ShowPrettyField(lnum, prefix, dict)
-  let value = a:dict['value']
-  call s:PromptAppendMessage(a:lnum, [[a:prefix, 'Normal'], [value, 'debugValue']])
 endfunc
 
 func s:HandleBreakpointCommands(bp, dict)
@@ -2098,7 +2121,7 @@ func s:HandleFrameList(dict)
     let msg = s:FormatFrameMessage(jumpable, frame)
     call s:PromptShowMessage(msg)
     if jumpable
-      call s:MarkLastCursor(frame['level'])
+      call s:ConcealJump(frame['level'])
     endif
   endfor
 endfunc
