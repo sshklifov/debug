@@ -884,15 +884,19 @@ func s:CommandsCommand(brs)
     return s:PromptShowError("Expecting 1 breakpoint.")
   endif
   if empty(a:brs)
-    let bp = max(map(keys(s:breakpoints), "str2nr(v:val)"))
+    let bp = max(keys(s:breakpoints))
   else
     let bp = a:brs[0]
   endif
   if !has_key(s:breakpoints, bp)
     call s:PromptShowError("Cannot set commands for breakpoint " .. bp)
   else
-    let Cb = function('s:HandleBreakpointCommands', [bp])
-    call s:SendMICommand("-break-info " . bp, Cb)
+    let script = s:Get(s:breakpoints, bp, 'script', [])
+    call s:OpenFloatEdit(30, 3, script)
+    augroup PromptDebugFloatEdit
+      exe printf("autocmd! WinClosed * call s:OnEditComplete(%d)", bp)
+    augroup END
+    $ " Go to end of float window
   endif
 endfunc
 
@@ -1799,13 +1803,13 @@ endfunc
 
 func s:Get(dict, ...) abort
   if type(a:dict) != v:t_dict
-    throw "Invalid arguments, expecting dictionary as second argument"
+    throw "Invalid arguments, expecting dictionary as first argument"
   endif
   let result = a:dict
   let default = a:000[-1]
   for key in a:000[:-2]
     if type(key) != v:t_string
-      throw "Invalid arguments, expecting string at third parameter and onwards"
+      throw "Invalid arguments, expecting string"
     endif
     if type(result) != v:t_dict || !has_key(result, key)
       return default
@@ -1967,14 +1971,6 @@ func s:ShowPrettyVar(lnum, var, dict)
       call s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(expr), Cb)
     endif
   endfor
-endfunc
-
-func s:HandleBreakpointCommands(bp, dict)
-  let script = s:Get(a:dict, 'BreakpointTable', 'body', 'bkpt', 'script', [])
-  call s:OpenFloatEdit(30, 3, script)
-  augroup PromptDebugFloatEdit
-    exe printf("autocmd! WinClosed * call s:OnEditComplete(%d)", a:bp)
-  augroup END
 endfunc
 
 func s:OnEditComplete(bp)
