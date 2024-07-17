@@ -173,8 +173,12 @@ func PromptDebugGetState()
   return s:
 endfunc
 
-func PromptDebugPrettyPrinter(regex, func)
-  call add(s:pretty_printers, [a:regex, a:func])
+func PromptDebugPrettyPrinter(regs, func)
+  if type(a:regs) == v:t_list
+    call add(s:pretty_printers, [a:func] + a:regs)
+  else
+    echo "Expecting a list of regular expressions as first argument"
+  endif
 endfunc
 
 func PromptDebugFindSym(func)
@@ -274,9 +278,9 @@ func PromptDebugStart(...)
   const s:eval_exception = "EvalFailedException"
   " Custom pretty printers (can be expanded by user)
   let s:pretty_printers = [
-        \ ['std::vector', 's:PrettyPrinterVector'],
-        \ ['std::string', 's:PrettyPrinterString'],
-        \ ['std::optional', 's:PrettyPrinterOptional']
+        \ ['s:PrettyPrinterVector', '^std::vector'],
+        \ ['s:PrettyPrinterString', '^std::string', '^std::.*basic_string<char'],
+        \ ['s:PrettyPrinterOptional', '^std::optional']
         \ ]
   " Set defaults for required variables
   let s:vars = #{}
@@ -1094,30 +1098,28 @@ endfunc
 func s:FindPrettyPrinter(dict)
   if has_key(a:dict, 'type')
     let type = a:dict['type']
-    for [pat, printer] in s:pretty_printers
-      if type =~# pat
-        return printer
-      endif
+    for [printer; pats] in s:pretty_printers
+      for pat in pats
+        if type =~# pat
+          return printer
+        endif
+      endfor
     endfor
   endif
   return ""
 endfunc
 
 func s:ShowVarAt(lnum, nesting, display_name, dict)
-  const pretty_fun = s:FindPrettyPrinter(a:dict)
   let new_var = #{}
-  let new_var['pretty_fun'] = pretty_fun
-  if !empty(pretty_fun)
-    let new_var["value"] = "<...>"
-  else
-    let value = get(a:dict, "value", "")
-    if empty(value)
-      let value = "???"
-    endif
-    let new_var["value"] = value
-  endif
 
-  let new_var['expandable'] = !empty(pretty_fun) || a:dict['numchild'] > 0
+  let value = get(a:dict, "value", "")
+  if empty(value)
+    let value = "???"
+  endif
+  let new_var["value"] = value
+  " TODO test
+  let new_var["type"] = get(a:dict, 'type', '')
+  let new_var['expandable'] = a:dict['numchild'] > 0
   let new_var['nesting'] = a:nesting
   let new_var['display_name'] = a:display_name
   let new_var['created'] = !has_key(a:dict, 'exp')
@@ -1180,17 +1182,31 @@ func s:ExpandCursor(lnum)
   endif
   " Find variable based on concealed string.
   let varname = map(extmarks[0][3]['virt_text'], 'v:val[0]')[0]
-  let var = s:vars[varname]
   " Remove highlights to signal that the link is inactive
   call map(extmarks, 'nvim_buf_del_extmark(0, ns, v:val[0])')
-  if empty(var['pretty_fun'])
+  " Determine variable type
+  let var = s:vars[varname]
+  if empty(var['type'])
+    let Cb = function('s:ExpandVariable', [a:lnum, varname])
+    return s:SendMICommand('-var-info-type ' .. s:EscapeMIArgument(varname), Cb)
+  else
+    " Determine type of variable from 'var' directly
+    call s:ExpandVariable(a:lnum, varname, var)
+  endif
+endfunc
+
+func s:ExpandVariable(lnum, varname, dict)
+  const pretty_fun = s:FindPrettyPrinter(a:dict)
+  let var = s:vars[a:varname]
+  if empty(pretty_fun)
     " Regular printing, fetch the children and print them recursively.
     let Cb = function('s:HandleVarChildren', [a:lnum, var])
-    return s:SendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(varname), Cb)
+    return s:SendMICommand('-var-list-children 1 ' .. s:EscapeMIArgument(a:varname), Cb)
   else
     " Pretty printing, evaluate custom expressions based on printer.
+    let var['pretty_fun'] = pretty_fun
     let Cb = function('s:ShowPrettyVar', [a:lnum, var])
-    call s:SendMICommand('-var-info-path-expression ' .. s:EscapeMIArgument(varname), Cb)
+    call s:SendMICommand('-var-info-path-expression ' .. s:EscapeMIArgument(a:varname), Cb)
   endif
 endfunc
 
