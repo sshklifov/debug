@@ -1,89 +1,68 @@
-Here is an example config:
-```
-function! s:Debug(file)
-  if TermDebugIsOpen()
-    echoerr 'Terminal debugger already running, cannot run two'
-    return
-  endif
+#### Goal
 
-  autocmd! User TermDebugStopPre call s:DebugStopPre()
-  autocmd! User TermDebugRunPost call s:DebugRunPost()
+The aim of this plugin is to make the debugging experience with GDB as smooth as possible. It is based on
+termdebug (`:help termdebug-example`). But I've substituted the terminal window with a prompt buffer -- hence the name.
 
-  call TermDebugStart()
+#### Bugfixes
 
-  command! -nargs=0 Capture call TermDebugGoToCapture()
-  command! -nargs=0 Gdb call TermDebugGoToGdb()
-  command! -nargs=0 Up call TermDebugGoUp("/home/" . $USER)
-  command! -nargs=0 Pwd call TermDebugShowPwd()
-  command! -nargs=0 Backtrace call TermDebugBacktrace()
-  command! -nargs=? Threads call TermDebugThreadInfo(<q-args>)
-  command! -nargs=0 DebugSym call TermDebugFindSym(expand('<cword>'))
-  command! -nargs=? Break call TermDebugGoToBreakpoint(<q-args>)
-  command! -nargs=? Commands call TermDebugEditCommands(<f-args>)
+Here is a list of bugs in termdebug that have been resolved:
+- Breakpoint signs not updating
+- Breakpoint signs overflowing signcolumn width (with >99 breakpoints)
+- Spurious continues
+- Stray symbols in disassembly
 
-  nnoremap <silent> <leader>v <cmd>call TermDebugEvaluate(expand('<cword>'))<CR>
-  nnoremap <silent> <leader>br :call TermDebugSendCommand("br " . <SID>GetDebugLoc())<CR>
-  nnoremap <silent> <leader>tbr :call TermDebugSendCommand("tbr " . <SID>GetDebugLoc())<CR>
-  nnoremap <silent> <leader>unt :call TermDebugSendCommands("tbr " . <SID>GetDebugLoc(), "c")<CR>
-  nnoremap <silent> <leader>pc :call TermDebugGoToPC()<CR>
+Also, the startup has been improved by removing a sneaky `:sleep`
 
-  call TermDebugSendCommand("set debug-file-directory /dev/null")
-  call TermDebugSendCommand("set print asm-demangle on")
-  call TermDebugSendCommand("set print pretty on")
-  call TermDebugSendCommand("set print frame-arguments none")
-  call TermDebugSendCommand("set print raw-frame-arguments off")
-  call TermDebugSendCommand("set print entry-values no")
-  call TermDebugSendCommand("set print inferior-events off")
-  call TermDebugSendCommand("set print thread-events off")
-  call TermDebugSendCommand("set print object on")
-  call TermDebugSendCommand("set breakpoint pending on")
-  call TermDebugSendCommand("set max-completions 20")
-  
-  let args = split(a:file, " ")
-  call TermDebugSendCommand("file " . args[0])
-  if len(args) > 1
-    call TermDebugSendCommand("set args " . join(args[1:], " "))
-  endif
-  call TermDebugSendCommand("start")
-endfunction
+#### Quality of life
 
-function! s:GetDebugLoc()
-  let basename = expand("%:t")
-  let lnum = line(".")
-  return printf("%s:%d", basename, lnum)
-endfunction
+- Quickly navigate between breakpoints (`PromptDebugGoToBreakpoint`).
+- Jump to line of execution (`PromptDebugGoToPC`).
+- Sanity checking if debugging symbols are loaded by searching for a specific symbol (`PromptDebugFindSym`).
+- Auto switching between asm and source mode (triggered e.g. on `si` or `s`).
+- Remote debugging.
+- Colored output.
 
-function! s:DebugRunPost()
-  call TermDebugSendCommand("set scheduler-locking step")
-endfunction
+#### GDB command custom handling
 
-function! s:DebugStopPre()
-  silent! nunmap <leader>v
-  silent! nunmap <leader>br
-  silent! nunmap <leader>tbr
-  silent! nunmap <leader>unt
-  silent! nunmap <leader>pc
+- Displaying breakpoint `commands` in a pop-up window.
+- `qfsave` which saves breakpoints to the quickfix (can be later restored with `qfsource`).
+- `asm` command to manually switch between asm and source code mode.
+- `finish` is locked to the execution of the same thread.
+- `up` and `down` jump over frames where there is no source code.
+- Custom `print`, `bt` and `info threads` with markers (activate via `<CR>`).
 
-  silent! delcommand Capture
-  silent! delcommand Gdb
-  silent! delcommand Up
-  silent! delcommand Pwd
-  silent! delcommand Backtrace
-  silent! delcommand Threads
-  silent! delcommand DebugSym
-  silent! delcommand Break
-  silent! delcommand Commands
-endfunction
+#### Custom printing
 
-function! ExeCompl(ArgLead, CmdLine, CursorPos)
-  if a:CursorPos < len(a:CmdLine)
-    return []
-  endif
-  let pat = "*" . a:ArgLead . "*"
-  let cmd = ["find", ".", "(", "-path", "**/.git", "-prune", "-false", "-o", "-name", pat, ")"]
-  let cmd += ["-type", "f", "-executable", "-printf", "%P\n"]
-  return systemlist(cmd)
-endfunction
+GDB's default printing is pretty messy. You can now optionally expand fields (via `<CR>`) so the output is not so
+cluttered. This has also a responsiveness advantage since less fields are evaluated.
 
-command! -nargs=? -complete=customlist,ExeCompl Start call s:Debug(<q-args>)
-```
+Fear not, pretty printing is supported as well. It runs independently of the python based pretty printer and **does not**
+require python as a dependency. This is almost always the case when remote debugging. There are registered printers for
+`std::vector`, `std::string` and `std::optional`.
+
+#### Command completion
+
+On an empty command line, pressing `<Tab>` will trigger completion with all the typed commands so far. This makes retyping
+commands more pleasant.
+
+Pressing `<Tab>` with something on the command line will suggest command completions.
+
+#### Starting
+
+Analogous to termdebug. `:PromptDebugStart` accepts the executable and will run a local debugger. It has custom
+completion, so feel free to press `<Tab>`.
+
+`:PromptDebugRun` is similar, but will place a breakpoint at the cursor and run the executable.
+
+`:PromptDebugAttach` accepts a process name and attaches to it. It also has `<Tab>` completion.
+
+For advanced usage, see `PromptDebugStart(...)`
+
+#### Misc
+
+This is not a comprehensive list. You can scour the source code or open an issue if something seems off. Each function
+that is intended to be run by the user is made global and prefixed with `PromptDebug`. So `:echo PromptDebug<Tab>` for
+example will show you all the available functions.
+
+Same goes for the variables: `:let g:promptdebug_<Tab>` will list all variables which control the behavior of the
+plugin.
