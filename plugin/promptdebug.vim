@@ -1118,7 +1118,6 @@ func s:ShowVarAt(lnum, nesting, display_name, dict)
     let value = "???"
   endif
   let new_var["value"] = value
-  " TODO test
   let new_var["type"] = get(a:dict, 'type', '')
   let new_var['expandable'] = a:dict['numchild'] > 0
   let new_var['nesting'] = a:nesting
