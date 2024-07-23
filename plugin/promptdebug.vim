@@ -278,9 +278,9 @@ func PromptDebugStart(...)
   const s:eval_exception = "EvalFailedException"
   " Custom pretty printers (can be expanded by user)
   let s:pretty_printers = [
-        \ ['s:PrettyPrinterVector', '^std::vector'],
-        \ ['s:PrettyPrinterString', '^std::string', '^std::.*basic_string<char'],
-        \ ['s:PrettyPrinterOptional', '^std::optional']
+        \ ['s:PrettyPrinterVector', 'std::vector'],
+        \ ['s:PrettyPrinterString', 'std::string', 'std::__cxx11::basic_string<char'],
+        \ ['s:PrettyPrinterOptional', 'std::optional']
         \ ]
   " Set defaults for required variables
   let s:vars = #{}
@@ -1100,7 +1100,8 @@ func s:FindPrettyPrinter(dict)
     let type = a:dict['type']
     for [printer; pats] in s:pretty_printers
       for pat in pats
-        if type =~# pat
+        let disallow_templates_pat = "^[^<]*" .. pat
+        if type =~# disallow_templates_pat
           return printer
         endif
       endfor
