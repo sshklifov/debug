@@ -885,10 +885,10 @@ endfunc
 
 func s:CommandsCommand(brs)
   if len(a:brs) > 1
-    return s:PromptShowError("Expecting 1 breakpoint.")
+    return s:PromptShowError("Expecting 1 breakpoint at most.")
   endif
   if empty(a:brs)
-    let bp = max(keys(s:breakpoints))
+    let bp = string(max(keys(s:breakpoints)))
   else
     let bp = a:brs[0]
   endif
@@ -1469,10 +1469,16 @@ func s:PlaceSourceCursor(dict)
   let filename = get(a:dict, 'fullname', '')
   let lnum = get(a:dict, 'line', '')
   if filereadable(filename) && str2nr(lnum) > 0
+    if getftime(filename) > s:exe_timestamp
+      call s:PromptShowWarning("File is more recent than executable")
+    endif
     let origw = win_getid()
     call PromptDebugGoToSource()
     if expand("%:p") != filename
       exe "e " . fnameescape(filename)
+    endif
+    if lnum > nvim_buf_line_count(0)
+      return s:PromptShowWarning("Cannot place cursor. Is executable up to date?")
     endif
     exe lnum
     normal z.
@@ -1533,23 +1539,30 @@ endfunc
 " Handle the debugged program starting to run.
 " Will store the process ID in s:pid
 func s:HandleProgramRun(dict)
-  if has_key(a:dict, 'pid')
-    let s:pid = a:dict['pid']
-    " Add some logs
-    call s:PromptShowNormal("Process id: " .. s:pid)
-    let cmd = ['stat', '--printf=%G', '/proc/' . s:pid]
-    if exists('s:host')
-      let cmd = ["ssh", s:host, join(cmd, ' ')]
-    endif
-    let user = system(cmd)
-    if !v:shell_error
-      call s:PromptShowNormal("Running as: " .. user)
-    endif
-    " Issue autocmds
-    if exists('#User#PromptDebugRunPost') && !exists('s:program_run_once')
-      doauto <nomodeline> User PromptDebugRunPost
-      let s:program_run_once = v:true
-    endif
+  let s:pid = a:dict['pid']
+  " Add some logs
+  call s:PromptShowNormal("Process id: " .. s:pid)
+  let cmd = ['stat', '--printf=%G', '/proc/' .. s:pid]
+  if exists('s:host')
+    let cmd = ["ssh", s:host, join(cmd, ' ')]
+  endif
+  let user = system(cmd)
+  if !v:shell_error
+    call s:PromptShowNormal("Running as: " .. user)
+  endif
+  " Save executable timestamp. Use this to detect if it's out of date.
+  let cmd = ['stat', '-L', '--printf=%Y', '/proc/' .. s:pid .. '/exe']
+  if exists('s:host')
+    let cmd = ["ssh", s:host, join(cmd, ' ')]
+  endif
+  let s:exe_timestamp = system(cmd)
+  if v:shell_error
+    let s:exe_timestamp = strftime("%s")
+  endif
+  " Issue autocmds
+  if exists('#User#PromptDebugRunPost') && !exists('s:program_run_once')
+    doauto <nomodeline> User PromptDebugRunPost
+    let s:program_run_once = v:true
   endif
 endfunc
 
@@ -1659,6 +1672,9 @@ func s:PlaceBreakpointSign(id)
   let placed = has_key(breakpoint, 'extmark')
   if bufnr > 0 && !placed
     call bufload(bufnr)
+    if breakpoint['lnum'] > nvim_buf_line_count(bufnr)
+      return s:PromptShowWarning("Cannot place breakpoint sign. Is executable up to date?")
+    endif
     let ns = nvim_create_namespace('PromptDebugBr')
     let text = has_key(breakpoint, 'parent') ? breakpoint['parent'] : a:id
     if len(text) > 2
