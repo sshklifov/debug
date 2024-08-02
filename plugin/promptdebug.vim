@@ -808,10 +808,8 @@ func s:PromptOutput(cmd)
 
   " Overriding GDB commands
   if g:promptdebug_override_finish_and_return
-    if name->s:IsCommand("finish", 3)
+    if name->s:IsCommand("finish", 3) || name->s:IsCommand("return", 3)
       return s:FinishCommand()
-    elseif name->s:IsCommand("return", 3)
-      return s:ReturnCommand()
     endif
   endif
   if g:promptdebug_override_up_and_down
@@ -936,13 +934,6 @@ func s:FinishCommand()
   let was_option = s:scheduler_locking
   call s:SendMICommandNoOutput('-gdb-set scheduler-locking on')
   call s:SendMICommandNoOutput('-exec-finish')
-  call s:SendMICommandNoOutput('-gdb-set scheduler-locking ' . was_option)
-endfunc
-
-func s:ReturnCommand()
-  let was_option = s:scheduler_locking
-  call s:SendMICommandNoOutput('-gdb-set scheduler-locking on')
-  call s:SendMICommandNoOutput('-interpreter-exec console finish')
   call s:SendMICommandNoOutput('-gdb-set scheduler-locking ' . was_option)
 endfunc
 
