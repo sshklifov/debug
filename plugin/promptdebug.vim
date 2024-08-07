@@ -246,6 +246,8 @@ endfunc
 
 """"""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""""{{{
 let s:command_hist = []
+let s:saved_br_locs = []
+let s:saved_br_cmds = []
 
 func PromptDebugStart(...)
   if PromptDebugIsOpen()
@@ -262,8 +264,9 @@ func PromptDebugStart(...)
   endif
 
   " Remove all prior variables
+  let persistent_vars = ["command_hist", "saved_br_locs", "saved_br_cmds"]
   for varname in keys(s:)
-    if varname != "command_hist"
+    if index(persistent_vars, varname) < 0
       exe "silent! unlet s:" . varname
     endif
   endfor
@@ -802,10 +805,10 @@ func s:PromptOutput(cmd)
   endif
 
   " Custom commands
-  if name == "qfsave"
-    return s:QfSaveCommand()
-  elseif name == "qfsource"
-    return s:QfSourceCommand()
+  if name == "brsave"
+    return s:BrSaveCommand()
+  elseif name == "brsource"
+    return s:BrSourceCommand()
   endif
 
   " Overriding GDB commands
@@ -904,32 +907,27 @@ func s:CommandsCommand(brs)
   endif
 endfunc
 
-
-func s:QfSourceCommand()
-  if empty(getqflist())
-    return s:PromptShowError("No breakpoints were inserted")
+func s:BrSaveCommand()
+  let valid_brs = filter(values(s:breakpoints), 'has_key(v:val, "fullname")')
+  if empty(valid_brs)
+    return s:PromptShowError("No breakpoints.")
   endif
-  for item in getqflist()
-    let fname = fnamemodify(bufname(item['bufnr']), ":p")
-    let lnum = item['lnum']
-    let loc = fname . ":" . lnum
-    call s:SendMICommand("-break-insert " . loc, function('s:HandleNewBreakpoint'))
-  endfor
-  call s:PromptShowNormal("Breakpoints loaded from quickfix")
+  let s:saved_br_locs = map(copy(valid_brs), 'v:val.fullname .. ":" .. v:val.lnum')
+  let s:saved_br_cmds = map(valid_brs, 'get(v:val, "script", [])')
+  call s:PromptShowNormal("Breakpoints saved!")
 endfunc
 
-func s:QfSaveCommand()
-  let valid_brs = filter(copy(s:breakpoints), 'has_key(v:val, "fullname")')
-  let items = map(items(valid_brs), {_, item -> {
-        \ "text": "Breakpoint " . item[0],
-        \ "filename": item[1]['fullname'],
-        \ "lnum": item[1]['lnum']
-        \ }})
-  if empty(items)
-    call s:PromptShowError("No breakpoints")
+func s:BrSourceCommand()
+  if empty(s:saved_br_locs) || empty(s:saved_br_cmds)
+    return s:PromptShowError("No breakpoints are saved!")
   endif
-  call setqflist([], ' ', {"title": "Breakpoints", "items": items})
-  call s:PromptShowNormal("Breakpoints saved in quickfix")
+  for loc in s:saved_br_locs
+    call s:SendMICommand("-break-insert " . loc, function('s:HandleNewBreakpoint'))
+  endfor
+  let cmds = filter(copy(s:saved_br_cmds), "!empty(v:val)")
+  if !empty(cmds)
+    call s:PromptShowWarning("Breakpoints commands were not loaded (TODO).")
+  endif
 endfunc
 
 func s:FinishCommand()

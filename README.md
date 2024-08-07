@@ -25,7 +25,7 @@ Also, the startup has been improved by removing a sneaky `:sleep`
 #### GDB command custom handling
 
 - Displaying breakpoint `commands` in a pop-up window.
-- `qfsave` which saves breakpoints to the quickfix (can be later restored with `qfsource`).
+- `brsave` which saves breakpoints (can be later restored with `brsource`).
 - `asm` command to manually switch between asm and source code mode.
 - `finish` is locked to the execution of the same thread.
 - `up` and `down` jump over frames where there is no source code.
