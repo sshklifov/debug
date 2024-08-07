@@ -922,13 +922,15 @@ func s:BrSourceCommand()
   if empty(s:saved_br_locs) || empty(s:saved_br_cmds)
     return s:PromptShowError("No breakpoints are saved!")
   endif
-  for loc in s:saved_br_locs
-    call s:SendMICommand("-break-insert " . loc, function('s:HandleNewBreakpoint'))
-  endfor
-  let cmds = filter(copy(s:saved_br_cmds), "!empty(v:val)")
-  if !empty(cmds)
-    call s:PromptShowWarning("Breakpoints commands were not loaded (TODO).")
+  if len(s:saved_br_locs) != len(s:saved_br_cmds)
+    return s:PromptShowError("Internal error: invalid state of saved breakpoints!")
   endif
+  for idx in range(len(s:saved_br_locs))
+    let Cb = function('s:HandleNewBreakpoint', [s:saved_br_cmds[idx]])
+    let loc = s:EscapeMIArgument(s:saved_br_locs[idx])
+    call s:SendMICommand("-break-insert " .. loc, Cb)
+  endfor
+  call s:PromptShowNormal("Inserted " .. len(s:saved_br_locs) .. " breakpoint(s).")
 endfunc
 
 func s:FinishCommand()
@@ -1320,7 +1322,7 @@ func s:HandleAsync(msg)
   elseif async == 'thread-created' || async == 'thread-exited'
     return s:HandleThreadChanged(async, dict)
   elseif async == 'breakpoint-created' || async == 'breakpoint-modified'
-    return s:HandleNewBreakpoint(dict)
+    return s:HandleNewBreakpoint([], dict)
   elseif async == 'breakpoint-deleted'
     return s:HandleBreakpointDelete(dict)
   elseif async == 'cmd-param-changed'
@@ -1394,11 +1396,9 @@ func s:HandleCursor(class, dict)
       let bkptno = a:dict['bkptno']
       if has_key(s:breakpoints, bkptno)
         let bkpt = s:breakpoints[bkptno]
-        if has_key(bkpt, 'script')
-          for cmd in bkpt['script']
-            call s:PromptOutput(cmd)
-          endfor
-        endif
+        for cmd in bkpt['script']
+          call s:PromptOutput(cmd)
+        endfor
       endif
     endif
     let s:stopped = 1
@@ -1580,7 +1580,7 @@ endfunc
 
 " Handle setting a breakpoint
 " Will update the sign that shows the breakpoint
-func s:HandleNewBreakpoint(dict)
+func s:HandleNewBreakpoint(def_cmds, dict)
   let bkpt = a:dict['bkpt']
   if bkpt['type'] != 'breakpoint'
     return
@@ -1594,19 +1594,19 @@ func s:HandleNewBreakpoint(dict)
   call s:ClearBreakpointSign(bkpt['number'], 0)
   if has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
     for location in bkpt['locations']
-      let id = s:AddBreakpoint(location, bkpt)
+      let id = s:AddBreakpoint(a:def_cmds, location, bkpt)
       call s:PlaceBreakpointSign(id)
     endfor
   else
-    let id = s:AddBreakpoint(bkpt, #{})
+    let id = s:AddBreakpoint(a:def_cmds, bkpt, #{})
     call s:PlaceBreakpointSign(id)
   endif
 endfunc
 
-func s:AddBreakpoint(bkpt, parent)
+func s:AddBreakpoint(def_cmds, bkpt, parent)
   let id = a:bkpt['number']
   if !has_key(s:breakpoints, id)
-    let s:breakpoints[id] = #{}
+    let s:breakpoints[id] = #{script: a:def_cmds}
   endif
   let item = s:breakpoints[id]
   let item['enabled'] = a:bkpt['enabled'] == 'y'
