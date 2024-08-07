@@ -288,6 +288,7 @@ func PromptDebugStart(...)
   let s:breakpoints = #{}
   let s:multi_brs = #{}
   let s:callbacks = #{}
+  let s:recent_files = #{}
   let s:floating_output = 0
   let s:source_bufnr = -1
   let s:pid = 0
@@ -1460,7 +1461,8 @@ func s:PlaceSourceCursor(dict)
   let filename = get(a:dict, 'fullname', '')
   let lnum = get(a:dict, 'line', '')
   if filereadable(filename) && str2nr(lnum) > 0
-    if getftime(filename) > s:exe_timestamp
+    if getftime(filename) > s:exe_timestamp && !has_key(s:recent_files, filename)
+      let s:recent_files[filename] = 1
       call s:PromptShowWarning("File is more recent than executable")
     endif
     let origw = win_getid()
