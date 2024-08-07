@@ -280,7 +280,8 @@ func PromptDebugStart(...)
   let s:pretty_printers = [
         \ ['s:PrettyPrinterVector', 'std::vector'],
         \ ['s:PrettyPrinterString', 'std::string', 'std::__cxx11::basic_string<char'],
-        \ ['s:PrettyPrinterOptional', 'std::optional']
+        \ ['s:PrettyPrinterOptional', 'std::optional'],
+        \ ['s:PrettyPrinterUniquePtr', 'std::unique_ptr']
         \ ]
   " Set defaults for required variables
   let s:vars = #{}
@@ -1267,6 +1268,11 @@ func s:PrettyPrinterOptional(expr)
   let has_value_expr = printf('%s._M_payload._M_engaged', a:expr)
   let value_expr = printf('%s._M_payload._M_payload._M_value', a:expr)
   return [[0, 'has_value', has_value_expr], [1, 'value', value_expr]]
+endfunc
+
+func s:PrettyPrinterUniquePtr(expr)
+  let expr = printf('%s._M_t._M_ptr()', a:expr)
+  return [[1, 'ptr', expr]]
 endfunc
 
 func s:EndPrinting()
