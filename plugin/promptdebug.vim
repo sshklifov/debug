@@ -284,7 +284,8 @@ func PromptDebugStart(...)
         \ ['s:PrettyPrinterVector', 'std::vector'],
         \ ['s:PrettyPrinterString', 'std::string', 'std::__cxx11::basic_string<char'],
         \ ['s:PrettyPrinterOptional', 'std::optional'],
-        \ ['s:PrettyPrinterUniquePtr', 'std::unique_ptr']
+        \ ['s:PrettyPrinterUniquePtr', 'std::unique_ptr'],
+        \ ['s:PrettyPrinterAtomic', 'std::atomic_bool', 'std::atomic_int', 'std::atomic_uint']
         \ ]
   " Set defaults for required variables
   let s:vars = #{}
@@ -1253,7 +1254,7 @@ endfunc
 func s:PrettyPrinterVector(expr)
   let start_expr = printf('%s._M_impl._M_start', a:expr)
   let length_expr = printf('%s._M_impl._M_finish-%s._M_impl._M_start', a:expr, a:expr)
-  return [[0, 'start', start_expr], [0, 'length', length_expr]]
+  return [[1, 'start', start_expr], [0, 'length', length_expr]]
 endfunc
 
 func s:PrettyPrinterString(expr)
@@ -1271,6 +1272,11 @@ endfunc
 func s:PrettyPrinterUniquePtr(expr)
   let expr = printf('%s._M_t._M_ptr()', a:expr)
   return [[1, 'ptr', expr]]
+endfunc
+
+func s:PrettyPrinterAtomic(expr)
+  let expr = printf('%s._M_i', a:expr)
+  return [[0, 'value', expr]]
 endfunc
 
 func s:EndPrinting()
