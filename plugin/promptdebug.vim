@@ -288,7 +288,8 @@ func PromptDebugStart(...)
         \ ['s:PrettyPrinterString', 'std::string', 'std::__cxx11::basic_string<char'],
         \ ['s:PrettyPrinterOptional', 'std::optional'],
         \ ['s:PrettyPrinterUniquePtr', 'std::unique_ptr'],
-        \ ['s:PrettyPrinterAtomic', 'std::atomic_bool', 'std::atomic_int', 'std::atomic_uint']
+        \ ['s:PrettyPrinterAtomicInt', 'std::atomic_int', 'std::atomic_uint'],
+        \ ['s:PrettyPrinterAtomicBool', 'std::atomic_bool']
         \ ]
   " Set defaults for required variables
   let s:vars = #{}
@@ -1279,8 +1280,13 @@ func s:PrettyPrinterUniquePtr(expr)
   return [[1, 'ptr', expr]]
 endfunc
 
-func s:PrettyPrinterAtomic(expr)
+func s:PrettyPrinterAtomicInt(expr)
   let expr = printf('%s._M_i', a:expr)
+  return [[0, 'value', expr]]
+endfunc
+
+func s:PrettyPrinterAtomicBool(expr)
+  let expr = printf('%s._M_base._M_i', a:expr)
   return [[0, 'value', expr]]
 endfunc
 
