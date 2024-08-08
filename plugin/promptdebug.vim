@@ -34,6 +34,9 @@ call s:DefineOption('g:promptdebug_override_info', 1)
 " Display source lines when program stops
 call s:DefineOption('g:promptdebug_show_source', 1)
 
+" Check if executable is out of date
+call s:DefineOption('g:promptdebug_check_timestamps', 1)
+
 " Highlights for sign column
 hi default link debugPrompt Bold
 hi default link debugPC CursorLine
@@ -293,7 +296,7 @@ func PromptDebugStart(...)
   let s:breakpoints = #{}
   let s:multi_brs = #{}
   let s:callbacks = #{}
-  let s:recent_files = #{}
+  let s:file_timestamps_warned = #{}
   let s:floating_output = 0
   let s:source_bufnr = -1
   let s:pid = 0
@@ -1471,9 +1474,11 @@ func s:PlaceSourceCursor(dict)
   let filename = get(a:dict, 'fullname', '')
   let lnum = get(a:dict, 'line', '')
   if filereadable(filename) && str2nr(lnum) > 0
-    if getftime(filename) > s:exe_timestamp && !has_key(s:recent_files, filename)
-      let s:recent_files[filename] = 1
-      call s:PromptShowWarning("File is more recent than executable")
+    if g:promptdebug_check_timestamps && !has_key(s:file_timestamps_warned, filename)
+      if getftime(filename) > s:exe_timestamp
+        let s:file_timestamps_warned[filename] = 1
+        call s:PromptShowWarning("File is more recent than executable")
+      endif
     endif
     let origw = win_getid()
     call PromptDebugGoToSource()
