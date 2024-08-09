@@ -814,6 +814,8 @@ func s:PromptOutput(cmd)
     return s:BrSaveCommand()
   elseif name == "brsource"
     return s:BrSourceCommand()
+  elseif name == "function"
+    return s:FunctionCommand(args)
   endif
 
   " Overriding GDB commands
@@ -983,6 +985,19 @@ func s:InfoThreadsCommand(id)
     let ids = sort(keys(s:thread_ids), 'N')
     for id in reverse(ids)
       let Cb = function('s:HandleThreadStack', [lnum, id])
+      call s:SendMICommand('-stack-list-frames --thread ' . id, Cb)
+    endfor
+  endif
+endfunc
+
+func s:FunctionCommand(name)
+  if empty(a:name)
+    call s:PromptShowError("Command expects a (partial) function name")
+  else
+    let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
+    let ids = sort(keys(s:thread_ids), 'N')
+    for id in reverse(ids)
+      let Cb = function('s:HandleThreadFilter', [lnum, id, a:name])
       call s:SendMICommand('-stack-list-frames --thread ' . id, Cb)
     endfor
   endif
@@ -1966,15 +1981,30 @@ func s:HandleThreadStack(lnum, id, dict)
   for frame in frames
     let fullname = get(frame, 'fullname', '')
     if filereadable(fullname) && stridx(fullname, prefix) == 0
-      let jumpable = has_key(frame, 'file') && filereadable(frame['file'])
-      let msg = s:FormatFrameMessage(jumpable, frame)
       " Display thread id instead of frame id
-      let msg[0][0] = "~" .. a:id
-      call s:PromptAppendMessage(a:lnum, msg)
-      if jumpable
+      let tag = "~" .. a:id
+      let frame_obj = s:FormatFrameMessageWithTag(tag, frame)
+      call s:PromptAppendMessage(a:lnum, frame_obj['items'])
+      if frame_obj['jumpable']
         call s:ConcealJumpAt(a:lnum, a:id, frame['level'])
       endif
       break
+    endif
+  endfor
+endfunc
+
+func s:HandleThreadFilter(lnum, id, func, dict)
+  let frames = s:GetListWithKeys(a:dict, 'stack')
+  for frame in frames
+    let fullname = get(frame, 'fullname', '')
+    if stridx(frame['func'], a:func) >= 0
+      " Display thread id instead of frame id
+      let tag = "~" .. a:id
+      let frame_obj = s:FormatFrameMessageWithTag(tag, frame)
+      call s:PromptAppendMessage(a:lnum, frame_obj['items'])
+      if frame_obj['jumpable']
+        call s:ConcealJumpAt(a:lnum, a:id, frame['level'])
+      endif
     endif
   endfor
 endfunc
@@ -2132,20 +2162,27 @@ func s:HandleDisassemble(addr, dict)
   call s:SelectAsmAddr(a:addr)
 endfunc
 
-func s:FormatFrameMessage(jumpable, dict)
+func s:FormatFrameMessageWithTag(tag, dict)
   let frame = a:dict
+  const jumpable = has_key(frame, 'file') && filereadable(frame['file'])
   let location = "???"
   if has_key(frame, 'file')
     let location = fnamemodify(frame['file'], ":t")
   endif
-  let level_item = ["#" .. frame['level'], 'debugIdentifier']
+
+  let tag_item = [a:tag, 'debugIdentifier']
   let in_item = [" in ", 'Normal']
-  let func_item = [frame["func"], a:jumpable ? 'debugJumpable' : 'Normal']
+  let func_item = [frame["func"], jumpable ? 'debugJumpable' : 'Normal']
   let addr_item = [frame["addr"], 'Normal']
   let at_item = [" at ", 'Normal']
   let loc_item = [location, 'debugLocation']
   let where_item = (func_item[0] == "??" ? addr_item : func_item)
-  return [level_item, in_item, where_item, at_item, loc_item]
+  return #{jumpable: jumpable, items: [tag_item, in_item, where_item, at_item, loc_item]}
+endfunc
+
+func s:FormatFrameMessage(dict)
+  let tag = "#" .. a:dict['level']
+  return s:FormatFrameMessageWithTag(tag, a:dict)
 endfunc
 
 func s:HandleFrameJump(level, dict)
@@ -2159,10 +2196,9 @@ endfunc
 func s:HandleFrameList(dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
-    let jumpable = has_key(frame, 'file') && filereadable(frame['file'])
-    let msg = s:FormatFrameMessage(jumpable, frame)
-    call s:PromptShowMessage(msg)
-    if jumpable
+    let frame_obj = s:FormatFrameMessage(frame)
+    call s:PromptShowMessage(frame_obj['items'])
+    if frame_obj['jumpable']
       call s:ConcealJump(frame['level'])
     endif
   endfor
