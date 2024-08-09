@@ -27,7 +27,7 @@ Also, the startup has been improved by removing a sneaky `:sleep`
 - Displaying breakpoint `commands` in a pop-up window.
 - `function` finds which thread(s) are executing a given function.
 - `brsave` saves breakpoints (can be later restored with `brsource`).
-- `asm` command to manually switch between asm and source code mode.
+- `asm` manually switches between asm and source code mode.
 - `finish` is locked to the execution of the same thread.
 - `up` and `down` jump over frames where there is no source code.
 - Custom `print`, `bt` and `info threads` with markers (activate via `<CR>`).
@@ -37,16 +37,16 @@ Also, the startup has been improved by removing a sneaky `:sleep`
 GDB's default printing is pretty messy. You can now optionally expand fields (via `<CR>`) so the output is not so
 cluttered. This has also a responsiveness advantage since less fields are evaluated.
 
-Fear not, pretty printing is supported as well. It runs independently of the python based pretty printer and **does not**
-require python as a dependency. This is almost always the case when remote debugging. There are registered printers for
-`std::vector`, `std::string` and `std::optional`.
+Pretty printing is supported as well. It runs independently of the python based pretty printer and **does not** require
+python as a dependency. This is on purpose due to remote targets not having python in majorty of cases. There are
+registered printers for `std::vector`, `std::string`, `std::optional` etc.
 
 #### Command completion
 
 On an empty command line, pressing `<Tab>` will trigger completion with all the typed commands so far. This makes retyping
 commands more pleasant.
 
-Pressing `<Tab>` with something on the command line will suggest command completions.
+Pressing `<Tab>` on an empty command line will open completion with past executed commands.
 
 #### Starting
 
