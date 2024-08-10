@@ -380,13 +380,6 @@ func s:LaunchGdb()
   call prompt_setprompt(bufnr(), '(gdb) ')
   call prompt_setcallback(bufnr(), function('s:PromptOutput'))
 
-  " Add a few introductory lines
-  if exists('s:host')
-    call s:PromptShowNormal("Remote debugging " .. s:host)
-  else
-    call s:PromptShowNormal("Local debugging")
-  endif
-
   augroup PromptDebug
     autocmd! BufModifiedSet <buffer> noautocmd setlocal nomodified
   augroup END
@@ -868,10 +861,20 @@ func s:PromptOutput(cmd)
 
   if g:promptdebug_override_info
     if cmd[0]->s:IsCommand("info", 3)
+      if len(cmd) == 1
+        return s:InfoCommand()
+      endif
+      let args = join(cmd[2:], " ")
       if cmd[1]->s:IsCommand("threads", 2)
-        return s:InfoThreadsCommand(get(cmd, 2, ''))
-      elseif cmd[0]->s:IsCommand("info", 3) && cmd[1]->s:IsCommand("breakpoints", 2)
-        return s:InfoBreakpointsCommand(get(cmd, 2, ''))
+        return s:InfoThreadsCommand(args)
+      elseif cmd[1]->s:IsCommand("breakpoints", 2)
+        return s:InfoBreakpointsCommand(args)
+      elseif cmd[1]->s:IsCommand('locals', 2)
+        return s:InfoLocalsCommand(args)
+      elseif cmd[1]->s:IsCommand('args', 2)
+        return s:InfoArgsCommand(args)
+      elseif cmd[1]->s:IsCommand('variables', 2)
+        return s:InfoVarsCommand()
       endif
     endif
   endif
@@ -884,6 +887,7 @@ func s:PromptOutput(cmd)
         \ name->s:IsCommand("break", 2) || name->s:IsCommand("tbreak", 2) ||
         \ name->s:IsCommand("awatch", 2) || name->s:IsCommand("rwatch", 2) ||
         \ name->s:IsCommand("continue", 4) || name == "c" ||
+        \ name == "r" ||
         \ name->s:IsCommand("watch", 2)
     return s:SendMICommandNoOutput(cmd_console)
   endif
@@ -1010,6 +1014,42 @@ func s:InfoBreakpointsCommand(id)
     let Cb = function('s:HandleBreakpointTable')
     call s:SendMICommand('-break-info', Cb)
   endif
+endfunc
+
+func s:InfoLocalsCommand(pat)
+  let Cb = function('s:HandleStackVariables', ["0", a:pat])
+  call s:SendMICommand('-stack-list-variables --no-frame-filters --skip-unavailable --no-values', Cb)
+endfunc
+
+func s:InfoArgsCommand(pat)
+  let Cb = function('s:HandleStackVariables', ["1", a:pat])
+  call s:SendMICommand('-stack-list-variables --no-frame-filters --no-values', Cb)
+endfunc
+
+func s:InfoVarsCommand()
+  let msg = "Command is disabled because it is slow."
+  let msg ..= " Did you mean 'info locals' or 'info args'?"
+  call s:PromptShowError(msg)
+endfunc
+
+func s:InfoCommand()
+  call s:PromptShowNormal("Current overrides are in place:")
+  let enabled = [["Disabled", "DiagnosticError"], ["OK", "DiagnosticOk"]]
+
+  let feature = ["  Finish and return are locked to the same thread: ", "Normal"]
+  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_finish_and_return]])
+  let feature = ["  Up and down skip frames with no symbols: ", "Normal"]
+  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_up_and_down]])
+  let feature = ["  Stepping switches between assembly and source: ", "Normal"]
+  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_s_and_n]])
+  let feature = ["  Print via expansion: ", "Normal"]
+  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_p]])
+  let feature = ["  Frame and backtrace with jumps: ", "Normal"]
+  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_f_and_bt]])
+  let feature = ["  Thread with jumps: ", "Normal"]
+  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_t]])
+  let feature = ["  Info (partial): ", "Normal"]
+  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_info]])
 endfunc
 " }}}
 
@@ -1569,8 +1609,14 @@ endfunc
 " Will store the process ID in s:pid
 func s:HandleProgramRun(dict)
   let s:pid = a:dict['pid']
-  " Add some logs
+  " Add a few introductory lines
+  if exists('s:host')
+    call s:PromptShowNormal("Remote debugging " .. s:host)
+  else
+    call s:PromptShowNormal("Local debugging")
+  endif
   call s:PromptShowNormal("Process id: " .. s:pid)
+
   let cmd = ['stat', '--printf=%G', '/proc/' .. s:pid]
   if exists('s:host')
     let cmd = ["ssh", s:host, join(cmd, ' ')]
@@ -1579,6 +1625,7 @@ func s:HandleProgramRun(dict)
   if !v:shell_error
     call s:PromptShowNormal("Running as: " .. user)
   endif
+
   " Save executable timestamp. Use this to detect if it's out of date.
   let cmd = ['stat', '-L', '--printf=%Y', '/proc/' .. s:pid .. '/exe']
   if exists('s:host')
@@ -1588,6 +1635,7 @@ func s:HandleProgramRun(dict)
   if v:shell_error
     let s:exe_timestamp = strftime("%s")
   endif
+
   " Issue autocmds
   if exists('#User#PromptDebugRunPost') && !exists('s:program_run_once')
     doauto <nomodeline> User PromptDebugRunPost
@@ -1949,7 +1997,7 @@ func s:FormatBreakpointMessage(bkpt, parent)
 
   let number_item = ["*" .. nr, 'debugIdentifier']
   let in_item = [" in ", 'Normal']
-  let location_item = [location, jumpable ? 'debugJumpable' : 'debugLocation']
+  let location_item = [location, jumpable && enabled ? 'debugJumpable' : 'debugLocation']
 
   call s:PromptShowMessage([number_item, in_item, location_item])
   if !enabled
@@ -1995,7 +2043,7 @@ endfunc
 
 func s:HandleThreadFilter(lnum, id, func, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
-  for frame in frames
+  for frame in reverse(frames)
     let fullname = get(frame, 'fullname', '')
     if stridx(frame['func'], a:func) >= 0
       " Display thread id instead of frame id
@@ -2006,6 +2054,16 @@ func s:HandleThreadFilter(lnum, id, func, dict)
         call s:ConcealJumpAt(a:lnum, a:id, frame['level'])
       endif
     endif
+  endfor
+endfunc
+
+func s:HandleStackVariables(arg, pat, dict)
+  let vars = a:dict['variables']
+  call filter(vars, 'get(v:val, "arg", "0") == a:arg')
+  call map(vars, "v:val.name")
+  call filter(vars, "stridx(v:val, a:pat) >= 0")
+  for var in vars
+    call s:PrintCommand(var)
   endfor
 endfunc
 
