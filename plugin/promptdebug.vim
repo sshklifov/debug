@@ -1538,12 +1538,32 @@ func s:PlaceCursorSign(dict)
   endif
 endfunc
 
+" Save executable timestamp. Use this to detect if it's out of date.
+func s:CreateExeTimestamp()
+  if exists('s:exe_timestamp')
+    return
+  endif
+
+  let cmd = ['stat', '-L', '--printf=%Y', '/proc/' .. s:pid .. '/exe']
+  if exists('s:host')
+    let cmd = ["ssh", s:host, join(cmd, ' ')]
+  endif
+  let s:exe_timestamp = system(cmd)
+  if v:shell_error
+    call PromptShowWarning("Failed to determine executable timestamp")
+    let s:exe_timestamp = localtime()
+  endif
+endfunc
+
 func s:PlaceSourceCursor(dict)
   let ns = nvim_create_namespace('PromptDebugPC')
   let filename = get(a:dict, 'fullname', '')
   let lnum = get(a:dict, 'line', '')
   if filereadable(filename) && str2nr(lnum) > 0
     if g:promptdebug_check_timestamps && !has_key(s:file_timestamps_warned, filename)
+      " Lazily create the stamp. There is a race condition where the parent process will fork but not exe yet.
+      " This the executable will appear as if it's the parent process. At least that's what I tell myself.
+      call s:CreateExeTimestamp()
       if getftime(filename) > s:exe_timestamp
         let s:file_timestamps_warned[filename] = 1
         call s:PromptShowWarning("File is more recent than executable")
@@ -1624,7 +1644,6 @@ func s:HandleProgramRun(dict)
     call s:PromptShowNormal("Local debugging")
   endif
   call s:PromptShowNormal("Process id: " .. s:pid)
-
   let cmd = ['stat', '--printf=%G', '/proc/' .. s:pid]
   if exists('s:host')
     let cmd = ["ssh", s:host, join(cmd, ' ')]
@@ -1632,16 +1651,6 @@ func s:HandleProgramRun(dict)
   let user = system(cmd)
   if !v:shell_error
     call s:PromptShowNormal("Running as: " .. user)
-  endif
-
-  " Save executable timestamp. Use this to detect if it's out of date.
-  let cmd = ['stat', '-L', '--printf=%Y', '/proc/' .. s:pid .. '/exe']
-  if exists('s:host')
-    let cmd = ["ssh", s:host, join(cmd, ' ')]
-  endif
-  let s:exe_timestamp = system(cmd)
-  if v:shell_error
-    let s:exe_timestamp = strftime("%s")
   endif
 
   " Issue autocmds
