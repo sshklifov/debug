@@ -30,7 +30,8 @@ Also, the startup has been improved by removing a sneaky `:sleep`
 - `asm` manually switches between asm and source code mode.
 - `finish` is locked to the execution of the same thread.
 - `up` and `down` jump over frames where there is no source code.
-- Custom `print`, `bt` and `info threads` with markers (activate via `<CR>`).
+- `where` will show you where you are!
+- Custom `print`, `bt` and `info ...` with markers (activate via `<CR>`).
 
 #### Custom printing
 
