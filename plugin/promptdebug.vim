@@ -241,8 +241,7 @@ func s:SwitchAsmMode(asm_mode)
   if s:asm_mode != a:asm_mode
     let s:asm_mode = a:asm_mode
     call s:ClearCursorSign()
-    let cmd = printf('-stack-info-frame --thread %d --frame %d', s:selected_thread, s:selected_frame)
-    call s:SendMICommand(cmd, {dict -> s:PlaceCursorSign(dict['frame'])})
+    call s:WhereCommand()
   endif
 endfunc
 "}}}
@@ -851,6 +850,8 @@ func s:PromptOutput(cmd)
       return s:FrameCommand(args)
     elseif name == "bt" || name->s:IsCommand("backtrace", 1)
       return s:BacktraceCommand(args)
+    elseif name->s:IsCommand("where", 3)
+      return s:WhereCommand()
     endif
   endif
   if g:promptdebug_override_t
@@ -869,6 +870,8 @@ func s:PromptOutput(cmd)
         return s:InfoThreadsCommand(args)
       elseif cmd[1]->s:IsCommand("breakpoints", 2)
         return s:InfoBreakpointsCommand(args)
+      elseif cmd[1]->s:IsCommand("stack", 1)
+        return s:BacktraceCommand(args)
       elseif cmd[1]->s:IsCommand('locals', 2)
         return s:InfoLocalsCommand(args)
       elseif cmd[1]->s:IsCommand('args', 2)
@@ -974,6 +977,11 @@ func s:BacktraceCommand(max_levels)
   else
     call s:SendMICommand('-stack-list-frames', function('s:HandleFrameList'))
   endif
+endfunc
+
+func s:WhereCommand()
+  let cmd = printf('-stack-info-frame --thread %d --frame %d', s:selected_thread, s:selected_frame)
+  call s:SendMICommand(cmd, {dict -> s:PlaceCursorSign(dict['frame'])})
 endfunc
 
 func s:ThreadCommand(id)
