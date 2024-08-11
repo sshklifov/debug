@@ -217,6 +217,12 @@ func s:SendMICommand(cmd, Callback)
   call chansend(s:gdb_job_id, cmd . "\n")
 endfunc
 
+function s:SendMICommandQuiet(cmd, Callback)
+  let token = s:token_counter
+  let s:silent_tokens[token] = 1
+  call s:SendMICommand(a:cmd, a:Callback)
+endfunction
+
 function s:SendMICommandNoOutput(cmd)
   let IgnoreOutput = {_ -> {}}
   return s:SendMICommand(a:cmd, IgnoreOutput)
@@ -296,6 +302,7 @@ func PromptDebugStart(...)
   let s:breakpoints = #{}
   let s:multi_brs = #{}
   let s:callbacks = #{}
+  let s:silent_tokens = #{}
   let s:file_timestamps_warned = #{}
   let s:floating_output = 0
   let s:source_bufnr = -1
@@ -785,7 +792,6 @@ func s:PromptOutput(cmd)
 
   let cmd = split(a:cmd, " ")
   let name = cmd[0]
-  let args = join(cmd[1:], " ")
 
   " Special commands (HEREDOC input)
   if name->s:IsCommand("commands", 3)
@@ -806,8 +812,6 @@ func s:PromptOutput(cmd)
     return s:BrSaveCommand()
   elseif name == "brsource"
     return s:BrSourceCommand()
-  elseif name == "function"
-    return s:FunctionCommand(args)
   endif
 
   " Overriding GDB commands
@@ -841,22 +845,26 @@ func s:PromptOutput(cmd)
     endif
   endif
   if g:promptdebug_override_p
-    if name == "p" || name == "print"
-      return s:PrintCommand(args)
+    if cmd[0] == "p" || cmd[0] == "print"
+      return s:PrintCommand(join(cmd[1:], " "))
     endif
   endif
   if g:promptdebug_override_f_and_bt
-    if name->s:IsCommand("frame", 1)
-      return s:FrameCommand(args)
-    elseif name == "bt" || name->s:IsCommand("backtrace", 1)
-      return s:BacktraceCommand(args)
-    elseif name->s:IsCommand("where", 3)
+    if cmd[0]->s:IsCommand("frame", 1)
+      if len(cmd) > 1 && cmd[1]->s:IsCommand("find", 1)
+        return s:FrameFindCommand(cmd[2:])
+      else
+        return s:FrameCommand(cmd[1])
+      endif
+    elseif cmd[0] == "bt" || cmd[0]->s:IsCommand("backtrace", 1)
+      return s:BacktraceCommand(cmd[1])
+    elseif cmd[0]->s:IsCommand("where", 3)
       return s:WhereCommand()
     endif
   endif
   if g:promptdebug_override_t
-    if name->s:IsCommand("thread", 1)
-      return s:ThreadCommand(args)
+    if cmd[0]->s:IsCommand("thread", 1)
+      return s:ThreadCommand(cmd[1])
     endif
   endif
 
@@ -865,17 +873,16 @@ func s:PromptOutput(cmd)
       if len(cmd) == 1
         return s:InfoCommand()
       endif
-      let args = join(cmd[2:], " ")
       if cmd[1]->s:IsCommand("threads", 2)
-        return s:InfoThreadsCommand(args)
+        return s:InfoThreadsCommand(cmd[2])
       elseif cmd[1]->s:IsCommand("breakpoints", 2)
-        return s:InfoBreakpointsCommand(args)
+        return s:InfoBreakpointsCommand(cmd[2])
       elseif cmd[1]->s:IsCommand("stack", 1)
-        return s:BacktraceCommand(args)
+        return s:BacktraceCommand(cmd[2])
       elseif cmd[1]->s:IsCommand('locals', 2)
-        return s:InfoLocalsCommand(args)
+        return s:InfoLocalsCommand(cmd[2])
       elseif cmd[1]->s:IsCommand('args', 2)
-        return s:InfoArgsCommand(args)
+        return s:InfoArgsCommand(cmd[2])
       elseif cmd[1]->s:IsCommand('variables', 2)
         return s:InfoVarsCommand()
       endif
@@ -995,21 +1002,49 @@ func s:InfoThreadsCommand(id)
   else
     let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
     let ids = sort(keys(s:thread_ids), 'N')
-    for id in reverse(ids)
-      let Cb = function('s:HandleThreadStack', [lnum, id])
+    for id in ids
+      let Cb = function('s:HandleThreadStack', [id])
       call s:SendMICommand('-stack-list-frames --thread ' . id, Cb)
     endfor
   endif
 endfunc
 
-func s:FunctionCommand(name)
-  if empty(a:name)
-    call s:PromptShowError("Command expects a (partial) function name")
+func s:ParseFlags(str, flags)
+  let str = a:str
+  let res = #{}
+  while !empty(str)
+    if !has_key(a:flags, str[0])
+      return #{error: "Unknown flag " .. str[0]}
+    endif
+    let flag_name = str[0]
+    let str = str[1:]
+    let flag_args = a:flags[flag_name]
+    if len(str) < flag_args
+      return #{error: printf("Flag %s expects %d arguments", flag_name, flag_args)}
+    endif
+    let res[flag_name] = str[:flag_args-1]
+    let str = str[flag_args:]
+  endwhile
+  return res
+endfunc
+
+func s:FrameFindCommand(str)
+  if empty(a:str)
+    return s:PromptShowError("Command expects a (partial) function name")
+  endif
+  let pat = a:str[-1]
+  let flags = s:ParseFlags(a:str[:-2], {"--current-thread": 0, "--inspect": 1})
+  if has_key(flags, "error")
+    return s:PromptShowError(flags.error)
+  endif
+
+  if has_key(flags, "-current-thread")
+      let Cb = function('s:HandleThreadFilter', [s:selected_thread, flags, pat])
+      call s:SendMICommand('-stack-list-frames', Cb)
   else
-    let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
     let ids = sort(keys(s:thread_ids), 'N')
-    for id in reverse(ids)
-      let Cb = function('s:HandleThreadFilter', [lnum, id, a:name])
+    for id in ids
+      let Cb = function('s:HandleThreadFilter', [id, flags, pat])
       call s:SendMICommand('-stack-list-frames --thread ' . id, Cb)
     endfor
   endif
@@ -1044,19 +1079,23 @@ func s:InfoCommand()
   call s:PromptShowNormal("Current overrides are in place:")
   let enabled = [["Disabled", "DiagnosticError"], ["OK", "DiagnosticOk"]]
 
-  let feature = ["  Finish and return are locked to the same thread: ", "Normal"]
+  let feature = ["  brsave and brsource to reuse breakpoints between sessions: ", "Normal"]
+  call s:PromptShowMessage([feature, enabled[v:true]])
+  let feature = ["  finish and return are locked to the same thread: ", "Normal"]
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_finish_and_return]])
-  let feature = ["  Up and down skip frames with no symbols: ", "Normal"]
+  let feature = ["  up and down skip frames with no symbols: ", "Normal"]
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_up_and_down]])
-  let feature = ["  Stepping switches between assembly and source: ", "Normal"]
+  let feature = ["  stepping switches between assembly and source: ", "Normal"]
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_s_and_n]])
-  let feature = ["  Print via expansion: ", "Normal"]
+  let feature = ["  print via expansion: ", "Normal"]
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_p]])
-  let feature = ["  Frame and backtrace with jumps: ", "Normal"]
+  let feature = ["  frame and backtrace with jumps: ", "Normal"]
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_f_and_bt]])
-  let feature = ["  Thread with jumps: ", "Normal"]
+  let feature = ["  frame find (accepts --inspect <varname> and --current-thread): ", "Normal"]
+  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_f_and_bt]])
+  let feature = ["  thread with jumps: ", "Normal"]
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_t]])
-  let feature = ["  Info (partial): ", "Normal"]
+  let feature = ["  info (partial): ", "Normal"]
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_info]])
 endfunc
 " }}}
@@ -1404,9 +1443,9 @@ endfunc
 
 func s:HandleResult(msg)
   let result = s:GetResultClass(a:msg)
+  let token = s:GetResultToken(a:msg)
   let dict = EvalCommaResults(a:msg)
   if result == 'done'
-    let token = s:GetResultToken(a:msg)
     if str2nr(token) > 0 && has_key(s:callbacks, token)
       let Callback = s:callbacks[token]
       return Callback(dict)
@@ -1414,7 +1453,13 @@ func s:HandleResult(msg)
       echom "Unhandled record!"
     endif
   elseif result == 'error'
-    return s:HandleError(dict)
+    if str2nr(token) > 0
+      if !has_key(s:silent_tokens, token)
+        return s:HandleError(dict)
+      else
+        unlet s:silent_tokens[token]
+      endif
+    endif
   endif
 endfunc
 
@@ -2040,35 +2085,34 @@ func s:HandleThreadJump(level, dict)
   call s:FrameCommand(a:level)
 endfunc
 
-func s:HandleThreadStack(lnum, id, dict)
+func s:HandleThreadStack(id, dict)
   let prefix = "/home/" .. $USER
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
     let fullname = get(frame, 'fullname', '')
     if filereadable(fullname) && stridx(fullname, prefix) == 0
-      " Display thread id instead of frame id
-      let tag = "~" .. a:id
-      let frame_obj = s:FormatFrameMessageWithTag(tag, frame)
-      call s:PromptAppendMessage(a:lnum, frame_obj['items'])
-      if frame_obj['jumpable']
-        call s:ConcealJumpAt(a:lnum, a:id, frame['level'])
-      endif
+      call s:ShowThreadFrame(a:id, frame)
       break
     endif
   endfor
 endfunc
 
-func s:HandleThreadFilter(lnum, id, func, dict)
+func s:HandleThreadFilter(id, flags, func, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in reverse(frames)
     let fullname = get(frame, 'fullname', '')
     if stridx(frame['func'], a:func) >= 0
-      " Display thread id instead of frame id
-      let tag = "~" .. a:id
-      let frame_obj = s:FormatFrameMessageWithTag(tag, frame)
-      call s:PromptAppendMessage(a:lnum, frame_obj['items'])
-      if frame_obj['jumpable']
-        call s:ConcealJumpAt(a:lnum, a:id, frame['level'])
+      if has_key(a:flags, "--current-thread")
+        call s:ShowFrame(frame)
+      else
+        call s:ShowThreadFrame(a:id, frame)
+      endif
+      if has_key(a:flags, "--inspect")
+        let expr = a:flags["--inspect"][0]
+        let cmd = printf("-var-create --thread %d --frame %d - * %s", a:id, frame['level'], expr)
+        let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
+        let Cb = function('s:ShowVarAt', [lnum, 1, expr])
+        call s:SendMICommandQuiet(cmd, Cb)
       endif
     endif
   endfor
@@ -2252,12 +2296,25 @@ func s:FormatFrameMessageWithTag(tag, dict)
   let at_item = [" at ", 'Normal']
   let loc_item = [location, 'debugLocation']
   let where_item = (func_item[0] == "??" ? addr_item : func_item)
-  return #{jumpable: jumpable, items: [tag_item, in_item, where_item, at_item, loc_item]}
+  return [jumpable, [tag_item, in_item, where_item, at_item, loc_item]]
 endfunc
 
-func s:FormatFrameMessage(dict)
+func s:ShowFrame(dict)
   let tag = "#" .. a:dict['level']
-  return s:FormatFrameMessageWithTag(tag, a:dict)
+  let [jumpable, items] = s:FormatFrameMessageWithTag(tag, a:dict)
+  call s:PromptShowMessage(items)
+  if jumpable
+    call s:ConcealJump(a:dict['level'])
+  endif
+endfunc
+
+func s:ShowThreadFrame(id, dict)
+  let tag = "~" .. a:id
+  let [jumpable, items] = s:FormatFrameMessageWithTag(tag, a:dict)
+  call s:PromptShowMessage(items)
+  if jumpable
+    call s:ConcealJump(a:id, a:dict['level'])
+  endif
 endfunc
 
 func s:HandleFrameJump(level, dict)
@@ -2271,11 +2328,7 @@ endfunc
 func s:HandleFrameList(dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
-    let frame_obj = s:FormatFrameMessage(frame)
-    call s:PromptShowMessage(frame_obj['items'])
-    if frame_obj['jumpable']
-      call s:ConcealJump(frame['level'])
-    endif
+    call s:ShowFrame(frame)
   endfor
 endfunc
 
