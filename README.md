@@ -1,4 +1,4 @@
-g### Goal
+### Goal
 
 The aim of this plugin is to make the debugging experience with GDB as smooth as possible. It is based on
 termdebug (`:help termdebug-example`). But I've substituted the terminal window with a prompt buffer -- hence the name.

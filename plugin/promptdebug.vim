@@ -854,17 +854,17 @@ func s:PromptOutput(cmd)
       if len(cmd) > 1 && cmd[1]->s:IsCommand("find", 1)
         return s:FrameFindCommand(cmd[2:])
       else
-        return s:FrameCommand(cmd[1])
+        return s:FrameCommand(get(cmd, 1, ''))
       endif
     elseif cmd[0] == "bt" || cmd[0]->s:IsCommand("backtrace", 1)
-      return s:BacktraceCommand(cmd[1])
+      return s:BacktraceCommand(get(cmd, 1, ''))
     elseif cmd[0]->s:IsCommand("where", 3)
       return s:WhereCommand()
     endif
   endif
   if g:promptdebug_override_t
     if cmd[0]->s:IsCommand("thread", 1)
-      return s:ThreadCommand(cmd[1])
+      return s:ThreadCommand(get(cmd, 1, ''))
     endif
   endif
 
@@ -874,15 +874,15 @@ func s:PromptOutput(cmd)
         return s:InfoCommand()
       endif
       if cmd[1]->s:IsCommand("threads", 2)
-        return s:InfoThreadsCommand(cmd[2])
+        return s:InfoThreadsCommand(get(cmd, 2, ''))
       elseif cmd[1]->s:IsCommand("breakpoints", 2)
-        return s:InfoBreakpointsCommand(cmd[2])
+        return s:InfoBreakpointsCommand(get(cmd, 2, ''))
       elseif cmd[1]->s:IsCommand("stack", 1)
-        return s:BacktraceCommand(cmd[2])
+        return s:BacktraceCommand(get(cmd, 2, ''))
       elseif cmd[1]->s:IsCommand('locals', 2)
-        return s:InfoLocalsCommand(cmd[2])
+        return s:InfoLocalsCommand(get(cmd, 2, ''))
       elseif cmd[1]->s:IsCommand('args', 2)
-        return s:InfoArgsCommand(cmd[2])
+        return s:InfoArgsCommand(get(cmd, 2, ''))
       elseif cmd[1]->s:IsCommand('variables', 2)
         return s:InfoVarsCommand()
       endif
@@ -2099,7 +2099,7 @@ endfunc
 
 func s:HandleThreadFilter(id, flags, func, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
-  for frame in reverse(frames)
+  for frame in frames
     let fullname = get(frame, 'fullname', '')
     if stridx(frame['func'], a:func) >= 0
       if has_key(a:flags, "--current-thread")
