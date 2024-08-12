@@ -623,6 +623,7 @@ func s:EnterMap()
   call s:EndHistory(v:false)
   call s:EndCompletion()
   call s:EndPrinting()
+  call s:EndFloatingOutput()
 
   if !PromptDebugIsStopped()
     return
@@ -1474,7 +1475,7 @@ func s:HandleStream(msg)
     if !exists('s:edit_win')
       call s:OpenFloatEdit(20, 1, [])
       augroup PromptDebugFloatEdit
-        autocmd! WinClosed * call s:DisableStream()
+        autocmd! WinClosed * call s:EndFloatingOutput()
       augroup END
     endif
     " Append message
@@ -1489,7 +1490,7 @@ func s:HandleStream(msg)
   endif
 endfunc
 
-func s:DisableStream()
+func s:EndFloatingOutput()
   let s:floating_output = 0
   call s:CloseFloatEdit()
 endfunc
