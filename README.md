@@ -26,7 +26,8 @@ Also, the startup has been improved by removing a sneaky `:sleep`
 
 - Displaying breakpoint `commands` in a pop-up window.
 - `frame find` finds which thread(s) are executing a given function.
-- `brsave` saves breakpoints (can be later restored with `brsource`).
+- `brsource` restores breakpoints from last session.
+- `brsave` can override which breakpoints are restored with `brsource`.
 - `asm` manually switches between asm and source code mode.
 - `finish` is locked to the execution of the same thread.
 - `up` and `down` jump over frames where there is no source code.

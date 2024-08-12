@@ -254,8 +254,6 @@ endfunc
 
 """"""""""""""""""""""""""""""""Launching GDB"""""""""""""""""""""""""""""""""{{{
 let s:command_hist = []
-let s:saved_br_locs = []
-let s:saved_br_cmds = []
 
 func PromptDebugStart(...)
   if PromptDebugIsOpen()
@@ -272,7 +270,7 @@ func PromptDebugStart(...)
   endif
 
   " Remove all prior variables
-  let persistent_vars = ["command_hist", "saved_br_locs", "saved_br_cmds"]
+  let persistent_vars = ["command_hist", "user_saved_brs", "auto_saved_brs"]
   for varname in keys(s:)
     if index(persistent_vars, varname) < 0
       exe "silent! unlet s:" . varname
@@ -809,9 +807,15 @@ func s:PromptOutput(cmd)
 
   " Custom commands
   if name == "brsave"
-    return s:BrSaveCommand()
+    return s:SaveBreakpoints('user_saved_brs')
   elseif name == "brsource"
-    return s:BrSourceCommand()
+    if exists('s:user_saved_brs')
+      return s:RestoreBreakpoints('user_saved_brs')
+    elseif exists('s:auto_saved_brs')
+      return s:RestoreBreakpoints('auto_saved_brs')
+    else
+      return PromptShowError("No breakpoints from previous are saved!")
+    endif
   endif
 
   " Overriding GDB commands
@@ -928,29 +932,28 @@ func s:CommandsCommand(brs)
   endif
 endfunc
 
-func s:BrSaveCommand()
+func s:SaveBreakpoints(where)
   let valid_brs = filter(values(s:breakpoints), 'has_key(v:val, "fullname")')
   if empty(valid_brs)
     return s:PromptShowError("No breakpoints.")
   endif
-  let s:saved_br_locs = map(copy(valid_brs), 'v:val.fullname .. ":" .. v:val.lnum')
-  let s:saved_br_cmds = map(valid_brs, 'get(v:val, "script", [])')
-  call s:PromptShowNormal("Breakpoints saved!")
+  let saved_br_locs = map(copy(valid_brs), 'v:val.fullname .. ":" .. v:val.lnum')
+  let saved_br_cmds = map(valid_brs, 'get(v:val, "script", [])')
+  let s:[a:where] = [saved_br_locs, saved_br_cmds]
 endfunc
 
-func s:BrSourceCommand()
-  if empty(s:saved_br_locs) || empty(s:saved_br_cmds)
+func s:RestoreBreakpoints(where)
+  let br_state = get(s:, a:where, [])
+  if empty(br_state)
     return s:PromptShowError("No breakpoints are saved!")
   endif
-  if len(s:saved_br_locs) != len(s:saved_br_cmds)
-    return s:PromptShowError("Internal error: invalid state of saved breakpoints!")
-  endif
-  for idx in range(len(s:saved_br_locs))
-    let Cb = function('s:HandleNewBreakpoint', [s:saved_br_cmds[idx]])
-    let loc = s:EscapeMIArgument(s:saved_br_locs[idx])
-    call s:SendMICommand("-break-insert " .. loc, Cb)
+  let locs = br_state[0]
+  let cmds = br_state[1]
+  for idx in range(len(locs))
+    let Cb = function('s:HandleNewBreakpoint', [cmds[idx]])
+    call s:SendMICommand("-break-insert " .. s:EscapeMIArgument(locs[idx]), Cb)
   endfor
-  call s:PromptShowNormal("Inserted " .. len(s:saved_br_locs) .. " breakpoint(s).")
+  call s:PromptShowNormal("Inserted " .. len(locs) .. " breakpoint(s).")
 endfunc
 
 func s:FinishCommand()
@@ -2580,6 +2583,9 @@ func s:EndPromptDebug(job_id, exit_code, event)
   if exists('#User#PromptDebugStopPre')
     doauto <nomodeline> User PromptDebugStopPre
   endif
+
+  " In case user forgot to type brsave
+  call s:SaveBreakpoints('auto_saved_brs')
 
   silent! autocmd! PromptDebug
   silent! autocmd! PromptDebugPreview
