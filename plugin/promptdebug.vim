@@ -1138,14 +1138,14 @@ func s:PromptShowError(msg)
   call s:PromptShowMessage([[a:msg, "ErrorMsg"]])
 endfunc
 
-func s:PromptShowSourceLine()
+func s:PromptShowSourceLine(tag_string)
   let lnum = line('.')
   let source_line = getline(lnum)
   let leading_spaces = len(matchstr(source_line, '^\s*'))
   " Copy source line with syntax
   let text = ""
   let text_hl = ""
-  let items = [[string(lnum), "debugJumpable"], ["\t", "Normal"]]
+  let items = [[a:tag_string, "debugJumpable"], ["\t", "Normal"]]
   for idx in range(leading_spaces, len(source_line) - 1)
     let hl = synID(lnum, idx + 1, 1)->synIDattr("name")
     if hl == text_hl
@@ -1630,7 +1630,8 @@ func s:PlaceSourceCursor(dict)
     normal z.
     " Display a hint where we stopped
     if g:promptdebug_show_source
-      call s:PromptShowSourceLine()
+      let tag = string(line('.'))
+      call s:PromptShowSourceLine(tag)
     endif
     " Highlight stopped line
     call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
@@ -1643,15 +1644,16 @@ endfunc
 
 func s:PlaceAsmCursor(dict)
   let addr = get(a:dict, 'addr', '')
-  if !s:SelectAsmAddr(addr)
+  let line = get(a:dict, 'line', '')
+  if !s:SelectAsmAddr(addr, line)
     " Reload disassembly
     let cmd = printf("-data-disassemble -a %s 0", addr)
-    let Cb = function('s:HandleDisassemble', [addr])
+    let Cb = function('s:HandleDisassemble', [addr, line])
     call s:SendMICommand(cmd, Cb)
   endif
 endfunc
 
-func s:SelectAsmAddr(addr)
+func s:SelectAsmAddr(addr, line)
   let origw = win_getid()
   call PromptDebugGoToSource()
   if bufname() != s:asm_bufname
@@ -1662,6 +1664,11 @@ func s:SelectAsmAddr(addr)
   if lnum > 0
     normal z.
     let ns = nvim_create_namespace('PromptDebugPC')
+    " Display a hint where we stopped
+    if g:promptdebug_show_source
+      let tag = '<' .. a:line .. '>'
+      call s:PromptShowSourceLine(tag)
+    endif
     call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
     let s:source_bufnr = bufnr()
     call win_gotoid(origw)
@@ -2263,7 +2270,7 @@ func s:HandlePwd(dict)
   echo "Path: " . pwd
 endfunc
 
-func s:HandleDisassemble(addr, dict)
+func s:HandleDisassemble(addr, line, dict)
   let asm_insns = a:dict['asm_insns']
 
   call deletebufline(s:asm_bufnr, 1, '$')
@@ -2282,7 +2289,7 @@ func s:HandleDisassemble(addr, dict)
     let line = printf("%s<%d>: %s", address, offset, inst)
     call appendbufline(s:asm_bufnr, "$", line)
   endfor
-  call s:SelectAsmAddr(a:addr)
+  call s:SelectAsmAddr(a:addr, a:line)
 endfunc
 
 func s:FormatFrameMessageWithTag(tag, dict)
