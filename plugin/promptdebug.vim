@@ -304,7 +304,6 @@ func PromptDebugStart(...)
   let s:file_timestamps_warned = #{}
   let s:floating_output = 0
   let s:source_bufnr = -1
-  let s:pid = 0
   let s:stopped = 1
   let s:asm_mode = 0
   let s:sourcewin = win_getid()
@@ -497,7 +496,7 @@ func s:CtrlC_Map()
     let input = getbufline(s:prompt_bufnr, '$')[0]
     call s:PromptShowMessage([[input, "Normal"], ["^C", "Cursor"]])
     call s:SetPrompt("")
-  else
+  elseif exists('s:pid')
     " Send interrupt
     let interrupt = 2
     if !exists('s:host')
@@ -507,6 +506,8 @@ func s:CtrlC_Map()
       let kill = printf("kill -%d %d", interrupt, s:pid)
       call system(["ssh", s:host, kill])
     endif
+  else
+    call PromptShowError("Program is not started")
   endif
 endfunc
 
@@ -1741,19 +1742,27 @@ func s:HandleNewBreakpoint(def_cmds, dict)
   call s:ClearBreakpointSign(bkpt['number'], 0)
   if has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
     for location in bkpt['locations']
-      let id = s:AddBreakpoint(a:def_cmds, location, bkpt)
+      let [id, _] = s:AddBreakpoint(a:def_cmds, location, bkpt)
       call s:PlaceBreakpointSign(id)
+      if new && exists('s:pid')
+        call s:FormatBreakpointMessage(location, bkpt)
+      endif
     endfor
   else
-    let id = s:AddBreakpoint(a:def_cmds, bkpt, #{})
+    let [id, new] = s:AddBreakpoint(a:def_cmds, bkpt, #{})
     call s:PlaceBreakpointSign(id)
+    if new && exists('s:pid')
+      call s:FormatBreakpointMessage(bkpt, #{})
+    endif
   endif
 endfunc
 
 func s:AddBreakpoint(def_cmds, bkpt, parent)
   let id = a:bkpt['number']
+  let new = v:false
   if !has_key(s:breakpoints, id)
     let s:breakpoints[id] = #{script: a:def_cmds}
+    let new = v:true
   endif
   let item = s:breakpoints[id]
   let item['enabled'] = a:bkpt['enabled'] == 'y'
@@ -1772,7 +1781,7 @@ func s:AddBreakpoint(def_cmds, bkpt, parent)
     let item['enabled'] = item['enabled'] && a:parent['enabled'] == 'y'
   endif
   let s:breakpoints[id] = item
-  return id
+  return [id, new]
 endfunc
 
 " Handle deleting a breakpoint
