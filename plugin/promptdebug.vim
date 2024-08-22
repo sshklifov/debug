@@ -291,6 +291,8 @@ func PromptDebugStart(...)
         \ ['s:PrettyPrinterString', 'std::string', 'std::__cxx11::basic_string<char'],
         \ ['s:PrettyPrinterOptional', 'std::optional'],
         \ ['s:PrettyPrinterUniquePtr', 'std::unique_ptr'],
+        \ ['s:PrettyPrinterSharedPtr', 'std::shared_ptr'],
+        \ ['s:PrettyPrinterSharedCount', 'std::_Sp_counted_deleter'],
         \ ['s:PrettyPrinterAtomicInt', 'std::atomic_int', 'std::atomic_uint'],
         \ ['s:PrettyPrinterAtomicBool', 'std::atomic_bool']
         \ ]
@@ -1385,6 +1387,17 @@ endfunc
 func s:PrettyPrinterUniquePtr(expr)
   let expr = printf('%s._M_t._M_ptr()', a:expr)
   return [[1, 'ptr', expr]]
+endfunc
+
+func s:PrettyPrinterSharedPtr(expr)
+  let ptr = printf('%s._M_ptr', a:expr)
+  let control = printf('%s._M_refcount._M_pi', a:expr)
+  return [[1, 'ptr', ptr], [1, 'control', control]]
+endfunc
+
+func s:PrettyPrinterSharedCount(expr)
+  let count = printf('%s->_M_use_count', a:expr)
+  return [[0, 'use_count', count]]
 endfunc
 
 func s:PrettyPrinterAtomicInt(expr)
