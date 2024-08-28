@@ -509,7 +509,7 @@ func s:CtrlC_Map()
       call system(["ssh", s:host, kill])
     endif
   else
-    call PromptShowError("Program is not started")
+    call s:PromptShowError("Program is not started")
   endif
 endfunc
 
@@ -818,8 +818,10 @@ func s:PromptOutput(cmd)
     elseif exists('s:auto_saved_brs')
       return s:RestoreBreakpoints('auto_saved_brs')
     else
-      return PromptShowError("No breakpoints from previous are saved!")
+      return s:PromptShowError("No breakpoints from previous are saved!")
     endif
+  elseif name == "map"
+    return s:MapCommand(cmd[1:])
   endif
 
   " Overriding GDB commands
@@ -958,6 +960,12 @@ func s:RestoreBreakpoints(where)
     call s:SendMICommand("-break-insert " .. s:EscapeMIArgument(locs[idx]), Cb)
   endfor
   call s:PromptShowNormal("Inserted " .. len(locs) .. " breakpoint(s).")
+endfunc
+
+func s:MapCommand(arg)
+  let arg = join(a:arg)
+  let cmd = printf('-stack-info-frame --frame %d --thread %d', s:selected_frame, s:selected_thread)
+  call s:SendMICommand(cmd, function('s:HandleFrameMap', [arg]))
 endfunc
 
 func s:FinishCommand()
@@ -2356,6 +2364,54 @@ func s:HandleFrameJump(level, dict)
   call s:PlaceCursorSign(frame)
   let s:selected_frame = a:level
   call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
+endfunc
+
+func s:HandleFrameMap(arg, dict)
+  let frame = a:dict['frame']
+  if !has_key(frame, 'fullname')
+    return s:PromptShowError("Frame has no source information available.")
+  endif
+  let frame_fullname = frame['fullname']
+  let basename = fnamemodify(frame_fullname, ':t')
+  if isdirectory(a:arg)
+    let cmd = printf("find %s ! -readable -prune -o -name %s -print", a:arg, basename)
+    let ret = systemlist(cmd)
+    if empty(ret) || v:shell_error
+      let msg = printf("Could not find %s in %s", string(basename), string(a:arg))
+      return s:PromptShowError(msg)
+    endif
+    let remap_fullname = ret[0]
+  elseif filereadable(a:arg)
+    let remap_fullname = a:arg
+  else
+    let msg = printf("File does not exist: %s", string(a:arg))
+    return s:PromptShowError(msg)
+  endif
+
+  while v:true
+    let remap_tail = fnamemodify(remap_fullname, ':t')
+    let frame_tail = fnamemodify(frame_fullname, ':t')
+    if remap_tail != frame_tail
+      break
+    endif
+    let next_remap_fullname = fnamemodify(remap_fullname, ':h')
+    if next_remap_fullname == remap_fullname
+      break
+    endif
+    let next_frame_fullname = fnamemodify(frame_fullname, ':h')
+    if next_frame_fullname == frame_fullname
+      break
+    endif
+    let remap_fullname = next_remap_fullname
+    let frame_fullname = next_frame_fullname
+  endwhile
+  if !empty(remap_fullname) && !empty(frame_fullname)
+    let from = s:EscapeMIArgument(frame_fullname)
+    let to = s:EscapeMIArgument(remap_fullname)
+    let cmd = printf('-gdb-set substitute-path %s %s', from, to)
+    call s:SendMICommandNoOutput(cmd)
+    call s:WhereCommand()
+  endif
 endfunc
 
 func s:HandleFrameList(dict)
