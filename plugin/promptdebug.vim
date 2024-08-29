@@ -2341,10 +2341,10 @@ endfunc
 
 func s:FormatFrameMessageWithTag(tag, dict)
   let frame = a:dict
-  const jumpable = has_key(frame, 'file') && filereadable(frame['file'])
+  const jumpable = has_key(frame, 'fullname') && filereadable(frame['fullname'])
   let location = "???"
-  if has_key(frame, 'file')
-    let location = fnamemodify(frame['file'], ":t")
+  if has_key(frame, 'fullname')
+    let location = fnamemodify(frame['fullname'], ":t")
   endif
 
   let tag_item = [a:tag, 'debugIdentifier']
