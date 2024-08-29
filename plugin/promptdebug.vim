@@ -494,7 +494,7 @@ func s:EmptyBuffer(nr)
 endfunc
 
 func s:CtrlC_Map()
-  if PromptDebugIsStopped()
+  if !empty(s:GetPrompt())
     let input = getbufline(s:prompt_bufnr, '$')[0]
     call s:PromptShowMessage([[input, "Normal"], ["^C", "Cursor"]])
     call s:SetPrompt("")
