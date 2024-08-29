@@ -2129,13 +2129,30 @@ endfunc
 func s:HandleThreadStack(id, dict)
   let prefix = "/home/" .. $USER
   let frames = s:GetListWithKeys(a:dict, 'stack')
+
   for frame in frames
     let fullname = get(frame, 'fullname', '')
     if filereadable(fullname) && stridx(fullname, prefix) == 0
-      call s:ShowThreadFrame(a:id, frame)
-      break
+      return s:ShowThreadFrame(a:id, frame)
     endif
   endfor
+  " Try a second time without the prefix
+  for frame in frames
+    let fullname = get(frame, 'fullname', '')
+    if filereadable(fullname)
+      return s:ShowThreadFrame(a:id, frame)
+    endif
+  endfor
+  " One more try with just a function name
+  for frame in frames
+    if has_key(frame, 'func')
+      return s:ShowThreadFrame(a:id, frame)
+    endif
+  endfor
+  " If all else fails...
+  if !empty(frames)
+    call s:ShowThreadFrame(a:id, frames[0])
+  endif
 endfunc
 
 func s:HandleThreadFilter(id, flags, func, dict)
