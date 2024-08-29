@@ -1763,7 +1763,7 @@ func s:HandleNewBreakpoint(def_cmds, dict)
   call s:ClearBreakpointSign(bkpt['number'], 0)
   if has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
     for location in bkpt['locations']
-      let [id, _] = s:AddBreakpoint(a:def_cmds, location, bkpt)
+      let [id, new] = s:AddBreakpoint(a:def_cmds, location, bkpt)
       call s:PlaceBreakpointSign(id)
       if new && exists('s:pid')
         call s:FormatBreakpointMessage(location, bkpt)
@@ -2095,7 +2095,7 @@ func s:FormatBreakpointMessage(bkpt, parent)
     let basename = fnamemodify(a:bkpt['fullname'], ':t')
     let location = basename .. ":" .. a:bkpt['line']
   else
-    let location = a:bkpt['addr']
+    let location = get(a:bkpt, 'addr', '???')
   endif
 
   let number_item = ["*" .. nr, 'debugIdentifier']
@@ -2127,9 +2127,9 @@ func s:HandleThreadJump(level, dict)
 endfunc
 
 func s:HandleThreadStack(id, dict)
-  let prefix = "/home/" .. $USER
   let frames = s:GetListWithKeys(a:dict, 'stack')
 
+  let prefix = "/home/" .. $USER
   for frame in frames
     let fullname = get(frame, 'fullname', '')
     if filereadable(fullname) && stridx(fullname, prefix) == 0
@@ -2488,10 +2488,9 @@ func s:HandleFrameChange(going_up, dict)
       return s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
     endif
   else
-    let prefix = "/home/" .. $USER
     for frame in frames
       let fullname = get(frame, 'fullname', '')
-      if filereadable(fullname) && stridx(fullname, prefix) == 0
+      if filereadable(fullname)
         call s:PromptShowMessage([["Switching to frame #" .. frame['level'], "Normal"]])
         call s:RefreshCursorSign(frame)
         let s:selected_frame = frame['level']
