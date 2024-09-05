@@ -861,11 +861,7 @@ func s:PromptOutput(cmd)
   endif
   if g:promptdebug_override_f_and_bt
     if cmd[0]->s:IsCommand("frame", 1)
-      if len(cmd) > 1 && cmd[1]->s:IsCommand("find", 1)
-        return s:FrameFindCommand(cmd[2:])
-      else
-        return s:FrameCommand(get(cmd, 1, ''))
-      endif
+      return s:FrameCommand(get(cmd, 1, ''))
     elseif cmd[0] == "bt" || cmd[0]->s:IsCommand("backtrace", 1)
       return s:BacktraceCommand(get(cmd, 1, ''))
     elseif cmd[0]->s:IsCommand("where", 3)
@@ -1011,17 +1007,16 @@ func s:ThreadCommand(id)
   call s:SendMICommand('-thread-select ' .. s:EscapeMIArgument(a:id), Cb)
 endfunc
 
-func s:InfoThreadsCommand(id)
-  if !empty(a:id)
-    call s:PromptShowError("Command does not accept arguments")
-  else
-    let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
-    let ids = sort(keys(s:thread_ids), 'N')
-    for id in ids
+func s:InfoThreadsCommand(filter)
+  let ids = sort(keys(s:thread_ids), 'N')
+  for id in ids
+    if !empty(a:filter)
+      let Cb = function('s:HandleThreadFilter', [id, a:filter])
+    else
       let Cb = function('s:HandleThreadStack', [id])
-      call s:SendMICommand('-stack-list-frames --thread ' . id, Cb)
-    endfor
-  endif
+    endif
+    call s:SendMICommand('-stack-list-frames --thread ' .. id, Cb)
+  endfor
 endfunc
 
 func s:ParseFlags(str, flags)
@@ -1041,28 +1036,6 @@ func s:ParseFlags(str, flags)
     let str = str[flag_args:]
   endwhile
   return res
-endfunc
-
-func s:FrameFindCommand(str)
-  if empty(a:str)
-    return s:PromptShowError("Command expects a (partial) function name")
-  endif
-  let pat = a:str[-1]
-  let flags = s:ParseFlags(a:str[:-2], {"--current-thread": 0, "--inspect": 1})
-  if has_key(flags, "error")
-    return s:PromptShowError(flags.error)
-  endif
-
-  if has_key(flags, "-current-thread")
-      let Cb = function('s:HandleThreadFilter', [s:selected_thread, flags, pat])
-      call s:SendMICommand('-stack-list-frames', Cb)
-  else
-    let ids = sort(keys(s:thread_ids), 'N')
-    for id in ids
-      let Cb = function('s:HandleThreadFilter', [id, flags, pat])
-      call s:SendMICommand('-stack-list-frames --thread ' . id, Cb)
-    endfor
-  endif
 endfunc
 
 func s:InfoBreakpointsCommand(id)
@@ -1105,8 +1078,6 @@ func s:InfoCommand()
   let feature = ["  print via expansion: ", "Normal"]
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_p]])
   let feature = ["  frame and backtrace with jumps: ", "Normal"]
-  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_f_and_bt]])
-  let feature = ["  frame find (accepts --inspect <varname> and --current-thread): ", "Normal"]
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_f_and_bt]])
   let feature = ["  thread with jumps: ", "Normal"]
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_t]])
@@ -2155,23 +2126,11 @@ func s:HandleThreadStack(id, dict)
   endif
 endfunc
 
-func s:HandleThreadFilter(id, flags, func, dict)
+func s:HandleThreadFilter(id, func, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   for frame in frames
-    let fullname = get(frame, 'fullname', '')
     if stridx(frame['func'], a:func) >= 0
-      if has_key(a:flags, "--current-thread")
-        call s:ShowFrame(frame)
-      else
-        call s:ShowThreadFrame(a:id, frame)
-      endif
-      if has_key(a:flags, "--inspect")
-        let expr = a:flags["--inspect"][0]
-        let cmd = printf("-var-create --thread %d --frame %d - * %s", a:id, frame['level'], expr)
-        let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
-        let Cb = function('s:ShowVarAt', [lnum, 1, expr])
-        call s:SendMICommandQuiet(cmd, Cb)
-      endif
+      call s:ShowThreadFrame(a:id, frame)
     endif
   endfor
 endfunc

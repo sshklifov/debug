@@ -25,7 +25,6 @@ Also, the startup has been improved by removing a sneaky `:sleep`
 #### GDB command custom handling
 
 - Displaying breakpoint `commands` in a pop-up window.
-- `frame find` finds which thread(s) are executing a given function.
 - `brsource` restores breakpoints from last session.
 - `brsave` can override which breakpoints are restored with `brsource`.
 - `map` can set the source file when it isn't available (akin to substitute-path).
@@ -33,6 +32,7 @@ Also, the startup has been improved by removing a sneaky `:sleep`
 - `finish` is locked to the execution of the same thread.
 - `up` and `down` jump over frames where there is no source code.
 - `where` will show you where you are!
+- `info threads` accepts a regex which is matched against frames.
 - Custom `print`, `bt` and `info ...` with markers (activate via `<CR>`).
 
 For more information, see `info` output.
