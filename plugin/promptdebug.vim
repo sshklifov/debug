@@ -910,7 +910,7 @@ func s:PromptOutput(cmd)
       endif
       if cmd[1]->s:IsCommand("threads", 2)
         return s:InfoThreadsCommand(get(cmd, 2, ''))
-      elseif cmd[1]->s:IsCommand("breakpoints", 2)
+      elseif cmd[1]->s:IsCommand("breakpoints", 1)
         return s:InfoBreakpointsCommand(get(cmd, 2, ''))
       elseif cmd[1]->s:IsCommand("stack", 1)
         return s:BacktraceCommand(get(cmd, 2, ''))
@@ -1069,9 +1069,10 @@ endfunc
 
 func s:InfoBreakpointsCommand(id)
   if !empty(a:id)
-    call s:PromptShowWarning("TODO: Command does not accept arguments")
+    let Cb = function('s:HandleBreakpointTable', [v:true])
+    call s:SendMICommand('-break-info ' .. a:id, Cb)
   else
-    let Cb = function('s:HandleBreakpointTable')
+    let Cb = function('s:HandleBreakpointTable', [v:false])
     call s:SendMICommand('-break-info', Cb)
   endif
 endfunc
@@ -2062,7 +2063,7 @@ endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Result handles""""""""""""""""""""""""""""""""{{{
-func s:HandleBreakpointTable(dict)
+func s:HandleBreakpointTable(show_times, dict)
   let table = s:GetListWithKeys(a:dict['BreakpointTable'], 'body')
   if empty(table)
     call s:PromptShowError("No breakpoints.")
@@ -2072,9 +2073,17 @@ func s:HandleBreakpointTable(dict)
     if has_key(bkpt, 'locations')
       for location in bkpt['locations']
         call s:FormatBreakpointMessage(location, bkpt)
+        if a:show_times
+          let str_times = bkpt['times'] == 1 ? "time" : "times"
+          call s:PromptShowNormal(printf("Breakpoint hit %d %s", bkpt['times'], str_times))
+        endif
       endfor
     else
       call s:FormatBreakpointMessage(bkpt, #{})
+      if a:show_times
+        let str_times = bkpt['times'] == 1 ? "time" : "times"
+        call s:PromptShowNormal(printf("Breakpoint hit %d %s", bkpt['times'], str_times))
+      endif
     endif
   endfor
 endfunc
