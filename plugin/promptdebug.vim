@@ -89,10 +89,6 @@ func PromptDebugGoToCapture()
 endfunc
 
 func PromptDebugGoToOutput()
-  if exists('s:host')
-    echo "TODO: No output available for remote targets"
-    return
-  endif
   let ids = win_findbuf(s:io_bufnr)
   if empty(ids)
     exe "tabnew " . s:io_bufname
@@ -322,21 +318,27 @@ func PromptDebugStart(...)
   let s:max_completions = 20
 
   call s:CreateSpecialBuffers()
-  return s:LaunchGdb()
+  return s:LaunchGdbAndTerminal()
 endfunc
 
-func s:LaunchGdb()
+func s:LaunchGdbAndTerminal()
   " Open terminal controlling inferior i/o
-  let tty = "/dev/null"
+  sp
+  enew
+  setlocal nobuflisted
   if !exists("s:host")
-    sp
-    enew
-    setlocal nobuflisted
     let s:tty_job_id = termopen("tail -f /dev/null", #{on_stdout: function('s:ProgramOutput')})
     let tty = nvim_get_chan_info(s:tty_job_id)['pty']
-    quit
+    call s:LaunchGdb(tty)
+  else
+    let cmd = ["ssh", "-t", s:host, "tty; tail -f /dev/null"]
+    let s:tty_job_id = termopen(cmd, #{on_stdout: function('s:ProgramOutput')})
+    " Wait for terminal to be resolved...
   endif
+  quit
+endfunc
 
+func s:LaunchGdb(tty)
   let gdb_cmd = [g:promptdebugger]
   " Add -quiet to avoid the intro message causing a hit-enter prompt.
   call add(gdb_cmd, '-quiet')
@@ -345,7 +347,7 @@ func s:LaunchGdb()
   " Disable pagination, it causes everything to stop
   call extend(gdb_cmd, ['-iex', 'set pagination off'])
   " Ignore inferior stdout 
-  call extend(gdb_cmd, ['-iex', 'set inferior-tty ' .. tty])
+  call extend(gdb_cmd, ['-iex', 'set inferior-tty ' .. a:tty])
   " Remove the (gdb) prompt
   call extend(gdb_cmd, ['-iex', 'set prompt'])
   " Limit completions for faster autocomplete
@@ -403,8 +405,12 @@ func s:LaunchGdb()
   inoremap <buffer> <CR> <cmd>call <SID>EnterMap()<CR>
   nnoremap <buffer> <CR> <cmd>call <SID>ExpandCursor(line('.'))<CR>
 
+  " Issue autocmds
+  if exists('#User#PromptDebugStartPost')
+    doauto <nomodeline> User PromptDebugStartPost
+  endif
+
   startinsert
-  return v:true
 endfunc
 
 func s:CreateSpecialBuffers()
@@ -446,10 +452,21 @@ func s:ProgramOutput(job_id, msgs, event)
     if empty(msg) || msg[0:1] == '&"'
       continue
     endif
-    if s:EmptyBuffer(s:io_bufnr)
-      call setbufline(s:io_bufnr, 1, msg)
+    if !exists('s:gdb_job_id') && msg =~# '/dev/pts/[0-9]\+'
+      let tty = msg
+      if exists('s:user')
+        call system(["ssh", s:host, "chmod", "666", tty])
+        if v:shell_error
+          call s:PromptShowWarning("Failed to change permissions for controlling tty.")
+        endif
+      endif
+      call s:LaunchGdb(tty)
     else
-      call appendbufline(s:io_bufnr, "$", msg)
+      if s:EmptyBuffer(s:io_bufnr)
+        call setbufline(s:io_bufnr, 1, msg)
+      else
+        call appendbufline(s:io_bufnr, "$", msg)
+      endif
     endif
   endfor
 endfunc
