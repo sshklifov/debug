@@ -37,6 +37,9 @@ call s:DefineOption('g:promptdebug_show_source', 1)
 " Check if executable is out of date
 call s:DefineOption('g:promptdebug_check_timestamps', 1)
 
+" Create an additional terminal which will capture inferior stdout
+call s:DefineOption('g:promptdebug_program_output', 1)
+
 " Highlights for sign column
 hi default link debugPrompt Bold
 hi default link debugPC CursorLine
@@ -89,6 +92,11 @@ func PromptDebugGoToCapture()
 endfunc
 
 func PromptDebugGoToOutput()
+  if !g:promptdebug_program_output
+    echo "Program output is disabled."
+    return
+  endif
+
   let ids = win_findbuf(s:io_bufnr)
   if empty(ids)
     exe "tabnew " . s:io_bufname
@@ -322,20 +330,24 @@ func PromptDebugStart(...)
 endfunc
 
 func s:LaunchGdbAndTerminal()
-  " Open terminal controlling inferior i/o
-  sp
-  enew
-  setlocal nobuflisted
-  if !exists("s:host")
-    let s:tty_job_id = termopen("tail -f /dev/null", #{on_stdout: function('s:ProgramOutput')})
-    let tty = nvim_get_chan_info(s:tty_job_id)['pty']
-    call s:LaunchGdb(tty)
+  if g:promptdebug_program_output
+    " Open terminal controlling inferior i/o
+    sp
+    enew
+    setlocal nobuflisted
+    if !exists("s:host")
+      let s:tty_job_id = termopen("tail -f /dev/null", #{on_stdout: function('s:ProgramOutput')})
+      let tty = nvim_get_chan_info(s:tty_job_id)['pty']
+      call s:LaunchGdb(tty)
+    else
+      let cmd = ["ssh", "-t", s:host, "tty; tail -f /dev/null"]
+      let s:tty_job_id = termopen(cmd, #{on_stdout: function('s:ProgramOutput')})
+      " Wait for terminal to be resolved...
+    endif
+    quit
   else
-    let cmd = ["ssh", "-t", s:host, "tty; tail -f /dev/null"]
-    let s:tty_job_id = termopen(cmd, #{on_stdout: function('s:ProgramOutput')})
-    " Wait for terminal to be resolved...
+    call s:LaunchGdb("/dev/null")
   endif
-  quit
 endfunc
 
 func s:LaunchGdb(tty)
