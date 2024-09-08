@@ -40,6 +40,9 @@ call s:DefineOption('g:promptdebug_check_timestamps', 1)
 " Create an additional terminal which will capture inferior stdout
 call s:DefineOption('g:promptdebug_program_output', 1)
 
+" Filter 'info threads' output by displaying jumpable threads only
+call s:DefineOption('g:promptdebug_thread_filter', 1)
+
 " Highlights for sign column
 hi default link debugPrompt Bold
 hi default link debugPC CursorLine
@@ -2152,6 +2155,10 @@ func s:HandleThreadStack(id, dict)
       return s:ShowThreadFrame(a:id, frame)
     endif
   endfor
+
+  if g:promptdebug_thread_filter
+    return
+  endif
   " One more try with just a function name
   for frame in frames
     if has_key(frame, 'func')
