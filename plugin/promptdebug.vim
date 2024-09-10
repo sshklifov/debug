@@ -301,7 +301,8 @@ func PromptDebugStart(...)
         \ ['s:PrettyPrinterSharedPtr', 'std::shared_ptr'],
         \ ['s:PrettyPrinterSharedCount', 'std::_Sp_counted_deleter'],
         \ ['s:PrettyPrinterAtomicInt', 'std::atomic_int', 'std::atomic_uint'],
-        \ ['s:PrettyPrinterAtomicBool', 'std::atomic_bool']
+        \ ['s:PrettyPrinterAtomicBool', 'std::atomic_bool'],
+        \ ['s:PrettyPrinterBitset', 'std::bitset']
         \ ]
   " Set defaults for required variables
   let s:vars = #{}
@@ -1420,6 +1421,11 @@ endfunc
 func s:PrettyPrinterAtomicBool(expr)
   let expr = printf('%s._M_base._M_i', a:expr)
   return [[0, 'value', expr]]
+endfunc
+
+func s:PrettyPrinterBitset(expr)
+  let expr = printf('%s._M_w', a:expr)
+  return [[0, 'word', expr]]
 endfunc
 
 func s:EndPrinting()
