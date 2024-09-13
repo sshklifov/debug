@@ -95,7 +95,7 @@ func PromptDebugGoToCapture()
 endfunc
 
 func PromptDebugGoToOutput()
-  if !g:promptdebug_program_output
+  if !exists('s:tty_job_id')
     echo "Program output is disabled."
     return
   endif
@@ -302,7 +302,9 @@ func PromptDebugStart(...)
         \ ['s:PrettyPrinterSharedCount', 'std::_Sp_counted_deleter'],
         \ ['s:PrettyPrinterAtomicInt', 'std::atomic_int', 'std::atomic_uint'],
         \ ['s:PrettyPrinterAtomicBool', 'std::atomic_bool'],
-        \ ['s:PrettyPrinterBitset', 'std::bitset']
+        \ ['s:PrettyPrinterBitset', 'std::bitset'],
+        \ ['s:PrettyPrinterFunction', 'std::function'],
+        \ ['s:PrettyPrinterPair', 'std::pair'],
         \ ]
   " Set defaults for required variables
   let s:vars = #{}
@@ -1426,6 +1428,17 @@ endfunc
 func s:PrettyPrinterBitset(expr)
   let expr = printf('%s._M_w', a:expr)
   return [[0, 'word', expr]]
+endfunc
+
+func s:PrettyPrinterFunction(expr)
+  let invoker = printf('%s._M_invoker', a:expr)
+  return [[0, 'invoker', invoker]]
+endfunc
+
+func s:PrettyPrinterPair(expr)
+  let first = printf('%s.first', a:expr)
+  let second = printf('%s.second', a:expr)
+  return [[1, 'first', first], [1, 'second', second]]
 endfunc
 
 func s:EndPrinting()
