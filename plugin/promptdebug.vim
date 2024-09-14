@@ -661,7 +661,6 @@ func s:EnterMap()
   call s:EndHistory(v:false)
   call s:EndCompletion()
   call s:EndPrinting()
-  call s:EndFloatingOutput()
 
   if !PromptDebugIsStopped()
     return
@@ -937,15 +936,18 @@ func s:PromptOutput(cmd)
         \ name->s:IsCommand("disable", 3) || name->s:IsCommand("enable", 2) ||
         \ name->s:IsCommand("break", 2) || name->s:IsCommand("tbreak", 2) ||
         \ name->s:IsCommand("awatch", 2) || name->s:IsCommand("rwatch", 2) ||
-        \ name->s:IsCommand("continue", 4) || name == "c" ||
-        \ name == "r" ||
-        \ name->s:IsCommand("watch", 2)
+        \ name->s:IsCommand("watch", 2) || name == "r" ||
+        \ name->s:IsCommand("continue", 4) || name == "c"
     return s:SendMICommandNoOutput(cmd_console)
   endif
 
   " Run command and redirect output to floating window
   let s:floating_output = 1
-  return s:SendMICommandNoOutput(cmd_console)
+  return s:SendMICommand(cmd_console, function('s:StopFloatingOutput'))
+endfunc
+
+func s:StopFloatingOutput(...)
+  let s:floating_output = 0
 endfunc
 
 func s:CommandsCommand(brs)
@@ -1520,7 +1522,8 @@ func s:HandleStream(msg)
     if !exists('s:edit_win')
       call s:OpenFloatEdit(20, 1, [])
       augroup PromptDebugFloatEdit
-        autocmd! WinClosed * call s:EndFloatingOutput()
+        autocmd! WinClosed * call s:StopFloatingOutput()
+        autocmd WinClosed * call s:CloseFloatEdit()
       augroup END
     endif
     " Append message
@@ -1533,11 +1536,6 @@ func s:HandleStream(msg)
     call s:OpenFloatEdit(max(widths) + 1, len(widths))
     stopinsert
   endif
-endfunc
-
-func s:EndFloatingOutput()
-  let s:floating_output = 0
-  call s:CloseFloatEdit()
 endfunc
 
 " Handle stopping and running message from gdb.
@@ -2531,6 +2529,7 @@ endfunc
 func s:HandleError(dict)
   call s:ClosePreview()
   call s:CloseFloatEdit()
+  call s:StopFloatingOutput()
   let lines = split(a:dict['msg'], "\n")
   for line in lines
     call s:PromptShowError(line)
