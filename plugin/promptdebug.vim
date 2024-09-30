@@ -304,6 +304,7 @@ func PromptDebugStart(...)
         \ ['s:PrettyPrinterAtomicBool', 'std::atomic_bool'],
         \ ['s:PrettyPrinterBitset', 'std::bitset'],
         \ ['s:PrettyPrinterFunction', 'std::function'],
+        \ ['s:PrettyPrinterThread', 'std::thread'],
         \ ['s:PrettyPrinterPair', 'std::pair'],
         \ ]
   " Set defaults for required variables
@@ -1435,6 +1436,11 @@ endfunc
 func s:PrettyPrinterFunction(expr)
   let invoker = printf('%s._M_invoker', a:expr)
   return [[0, 'invoker', invoker]]
+endfunc
+
+func s:PrettyPrinterThread(expr)
+  let id = printf('%s._M_id._M_thread', a:expr)
+  return [[0, 'running_thread', id]]
 endfunc
 
 func s:PrettyPrinterPair(expr)
