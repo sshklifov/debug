@@ -254,7 +254,6 @@ func s:SwitchAsmMode(asm_mode)
   if s:asm_mode != a:asm_mode
     let s:asm_mode = a:asm_mode
     call s:ClearCursorSign()
-    call s:WhereCommand()
   endif
 endfunc
 "}}}
@@ -345,13 +344,14 @@ func s:LaunchGdbAndTerminal()
     if !exists("s:host")
       let s:tty_job_id = termopen("tail -f /dev/null", #{on_stdout: function('s:ProgramOutput')})
       let tty = nvim_get_chan_info(s:tty_job_id)['pty']
+      quit
       call s:LaunchGdb(tty)
     else
       let cmd = ["ssh", "-t", s:host, "tty; tail -f /dev/null"]
       let s:tty_job_id = termopen(cmd, #{on_stdout: function('s:ProgramOutput')})
       " Wait for terminal to be resolved...
+      quit
     endif
-    quit
   else
     call s:LaunchGdb("/dev/null")
   endif
@@ -1019,6 +1019,7 @@ endfunc
 
 func s:AsmCommand()
   call s:SwitchAsmMode(s:asm_mode ? 0 : 1)
+  call s:WhereCommand()
 endfunc
 
 func s:FrameCommand(level)
