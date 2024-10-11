@@ -937,7 +937,9 @@ func s:PromptOutput(cmd)
         \ name->s:IsCommand("disable", 3) || name->s:IsCommand("enable", 2) ||
         \ name->s:IsCommand("break", 2) || name->s:IsCommand("tbreak", 2) ||
         \ name->s:IsCommand("awatch", 2) || name->s:IsCommand("rwatch", 2) ||
-        \ name->s:IsCommand("watch", 2) || name == "r" ||
+        \ name->s:IsCommand("watch", 2) ||
+        \ name->s:IsCommand("catch", 3) || name->s:IsCommand("tcatch", 2) ||
+        \ name->s:IsCommand("run", 1) ||
         \ name->s:IsCommand("continue", 4) || name == "c"
     return s:SendMICommandNoOutput(cmd_console)
   endif
@@ -1780,6 +1782,14 @@ endfunc
 func s:HandleNewBreakpoint(def_cmds, dict)
   let bkpt = a:dict['bkpt']
   if bkpt['type'] != 'breakpoint'
+    " Display a message to the user
+    if bkpt['type'] == 'catchpoint'
+      let msg = printf('Catchpoint %s (%s)', bkpt['number'], bkpt['what'])
+      call s:PromptShowNormal(msg)
+    elseif stridx(bkpt['type'], 'watchpoint') >= 0
+      let msg = printf('Watchpoint %s (%s)', bkpt['number'], bkpt['what'])
+      call s:PromptShowNormal(msg)
+    endif
     return
   endif
   if has_key(bkpt, 'pending')
