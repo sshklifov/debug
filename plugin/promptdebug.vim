@@ -295,6 +295,7 @@ func PromptDebugStart(...)
   let s:pretty_printers = [
         \ ['s:PrettyPrinterVector', 'std::vector'],
         \ ['s:PrettyPrinterString', 'std::string', 'std::__cxx11::basic_string<char'],
+        \ ['s:PrettyPrinterFilesystem', 'std::filesystem::path'],
         \ ['s:PrettyPrinterOptional', 'std::optional'],
         \ ['s:PrettyPrinterUniquePtr', 'std::unique_ptr'],
         \ ['s:PrettyPrinterSharedPtr', 'std::shared_ptr'],
@@ -940,6 +941,7 @@ func s:PromptOutput(cmd)
         \ name->s:IsCommand("watch", 2) ||
         \ name->s:IsCommand("catch", 3) || name->s:IsCommand("tcatch", 2) ||
         \ name->s:IsCommand("run", 1) ||
+        \ name->s:IsCommand("untill", 3) || name == "u" ||
         \ name->s:IsCommand("continue", 4) || name == "c"
     return s:SendMICommandNoOutput(cmd_console)
   endif
@@ -1397,6 +1399,11 @@ func s:PrettyPrinterString(expr)
   let str_expr = printf('%s._M_dataplus._M_p', a:expr)
   let length_expr = printf('%s._M_string_length', a:expr)
   return [[0, 'string', str_expr], [0, 'length', length_expr]]
+endfunc
+
+func s:PrettyPrinterFilesystem(expr)
+  let str_expr = printf('%s.string()', a:expr)
+  return [[0, 'pathname', str_expr]]
 endfunc
 
 func s:PrettyPrinterOptional(expr)
@@ -2686,6 +2693,7 @@ func s:OpenScrollablePreview(title, lines)
   if !s:EmptyBuffer(nvim_win_get_buf(winid)) 
     call nvim_win_set_option(winid, 'cursorline', v:true)
     call nvim_win_set_option(winid, 'scrolloff', 2)
+    call nvim_win_set_option(winid, 'hlsearch', v:false)
   endif
 endfunc
 
