@@ -163,12 +163,12 @@ func PromptDebugSendCommands(...)
 endfunc
 
 func PromptDebugSendCommand(cmd)
-  if !PromptDebugIsStopped()
+  call s:StopFloatingOutput()
+  if PromptDebugIsStopped()
+    call s:PromptOutput(a:cmd)
+  else
     echo "Cannot send command. Program is running."
-    return
   endif
-  let msg = '-interpreter-exec console ' .. s:EscapeMIArgument(a:cmd)
-  call s:SendMICommandNoOutput(msg)
 endfunc
 
 func PromptDebugGetHistory()
@@ -739,12 +739,17 @@ function! s:CmdlineCompl(ArgLead, CmdLine, CursorPos)
   return []
 endfunction
 
+func s:InterpreterExec(cmd)
+  let msg = '-interpreter-exec console ' .. s:EscapeMIArgument(a:cmd)
+  call s:SendMICommandNoOutput(msg)
+endfunc
+
 func s:StartLocally(str_args)
   if PromptDebugStart()
     let cmd_args = split(a:str_args, '\s')
     if len(cmd_args) >= 1
-      call PromptDebugSendCommand("file " .. cmd_args[0])
-      call PromptDebugSendCommand("start " .. join(cmd_args[1:]))
+      call s:InterpreterExec("file " .. cmd_args[0])
+      call s:InterpreterExec("start " .. join(cmd_args[1:]))
     endif
   endif
 endfunc
@@ -760,13 +765,13 @@ func s:RunLocally(str_args)
   if len(cmd_args) <= 0
     return
   endif
-  call PromptDebugSendCommand("file " .. cmd_args[0])
+  call s:InterpreterExec("file " .. cmd_args[0])
   " Add a breakpoint with the current cursor position
   if !empty(filename)
     let br = printf("tbr %s:%d", filename, lnum)
-    call PromptDebugSendCommand(br)
+    call s:InterpreterExec(br)
   endif
-  call PromptDebugSendCommand("run " .. join(cmd_args[1:]))
+  call s:InterpreterExec("run " .. join(cmd_args[1:]))
 endfunc
 
 function! s:AttachCompl(ArgLead, CmdLine, CursorPos)
@@ -805,7 +810,7 @@ func s:AttachLocally(proc)
     let pid = pids[0]
   endif
   call PromptDebugStart()
-  call PromptDebugSendCommand("attach " .. pid)
+  call s:InterpreterExec("attach " .. pid)
 endfunc
 
 if g:promptdebug_commands
@@ -933,22 +938,14 @@ func s:PromptOutput(cmd)
 
   " Good 'ol GDB commands
   let cmd_console = '-interpreter-exec console ' . s:EscapeMIArgument(a:cmd)
-
-  if name->s:IsCommand("condition", 4) || name->s:IsCommand("delete", 1) ||
-        \ name->s:IsCommand("disable", 3) || name->s:IsCommand("enable", 2) ||
-        \ name->s:IsCommand("break", 2) || name->s:IsCommand("tbreak", 2) ||
-        \ name->s:IsCommand("awatch", 2) || name->s:IsCommand("rwatch", 2) ||
-        \ name->s:IsCommand("watch", 2) ||
-        \ name->s:IsCommand("catch", 3) || name->s:IsCommand("tcatch", 2) ||
-        \ name->s:IsCommand("run", 1) ||
-        \ name->s:IsCommand("untill", 3) || name == "u" ||
-        \ name->s:IsCommand("continue", 4) || name == "c"
+  if name->s:IsCommand("info", 3)
+    " Run command and redirect output to floating window
+    let s:floating_output = 1
+    return s:SendMICommand(cmd_console, function('s:StopFloatingOutput'))
+  else
+    " Run silently and report errors only
     return s:SendMICommandNoOutput(cmd_console)
   endif
-
-  " Run command and redirect output to floating window
-  let s:floating_output = 1
-  return s:SendMICommand(cmd_console, function('s:StopFloatingOutput'))
 endfunc
 
 func s:StopFloatingOutput(...)
@@ -1539,7 +1536,7 @@ func s:HandleStream(msg)
       call s:OpenFloatEdit(20, 1, [])
       augroup PromptDebugFloatEdit
         autocmd! WinClosed * call s:StopFloatingOutput()
-        autocmd WinClosed * call s:CloseFloatEdit()
+        autocmd! WinClosed * call s:CloseFloatEdit()
       augroup END
     endif
     " Append message
