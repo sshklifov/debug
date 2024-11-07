@@ -314,7 +314,7 @@ func PromptDebugStart(...)
   let s:multi_brs = #{}
   let s:callbacks = #{}
   let s:silent_tokens = #{}
-  let s:file_timestamps_warned = #{}
+  let s:files_warned = #{}
   let s:floating_output = 0
   let s:source_bufnr = -1
   let s:stopped = 1
@@ -1663,18 +1663,24 @@ func s:CreateExeTimestamp()
   endif
 endfunc
 
+func s:WarnFileOnce(file, msg)
+  if !has_key(s:files_warned, a:file)
+    let s:files_warned[a:file] = 1
+    call s:PromptShowWarning(a:msg)
+  endif
+endfunc
+
 func s:PlaceSourceCursor(dict)
   let ns = nvim_create_namespace('PromptDebugPC')
   let filename = get(a:dict, 'fullname', '')
   let lnum = get(a:dict, 'line', '')
   if filereadable(filename) && str2nr(lnum) > 0
-    if g:promptdebug_check_timestamps && !has_key(s:file_timestamps_warned, filename)
+    if g:promptdebug_check_timestamps
       " Lazily create the stamp. There is a race condition where the parent process will fork but not exe yet.
       " This the executable will appear as if it's the parent process. At least that's what I tell myself.
       call s:CreateExeTimestamp()
       if getftime(filename) > s:exe_timestamp
-        let s:file_timestamps_warned[filename] = 1
-        call s:PromptShowWarning("File is more recent than executable")
+        call s:WarnFileOnce(filename, "File is more recent than executable")
       endif
     endif
     let origw = win_getid()
@@ -1696,6 +1702,8 @@ func s:PlaceSourceCursor(dict)
     call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
     let s:source_bufnr = bufnr()
     call win_gotoid(origw)
+  elseif !empty(filename)
+    call s:WarnFileOnce(filename, "Unknown file: " .. filename)
   else
     call s:PromptShowNormal("???\tNo source available.")
   endif
@@ -1893,7 +1901,12 @@ func s:PlaceBreakpointSign(id)
   if !has_key(breakpoint, 'fullname')
     return
   endif
-  let bufnr = bufnr(breakpoint['fullname'])
+  let fullname = breakpoint['fullname']
+  if !filereadable(fullname)
+    return s:WarnFileOnce(fullname, "Unknown file: " .. fullname)
+  endif
+
+  let bufnr = bufnr(fullname)
   let placed = has_key(breakpoint, 'extmark')
   if bufnr > 0 && !placed
     call bufload(bufnr)
