@@ -568,8 +568,8 @@ endfunc
 
 func s:OpenHistory()
   if !empty(s:command_hist)
-    call s:OpenScrollablePreview("History", reverse(copy(s:command_hist)))
-    call s:ScrollPreview("1")
+    call s:OpenScrollablePreview("History", copy(s:command_hist))
+    call s:ScrollPreview("$")
     call s:ClosePreviewOn('InsertLeave', 'CursorMovedI')
   endif
 endfunc
@@ -896,8 +896,9 @@ func s:PromptOutput(cmd)
     endif
   endif
   if g:promptdebug_override_p
-    if cmd[0] == "p" || cmd[0] == "print"
-      return s:PrintCommand(join(cmd[1:], " "))
+    if cmd[0] == "p" || cmd[0][:1] == 'p/' ||
+          \ cmd[0] == "print" || cmd[0][:5] == 'print/'
+      return s:PrintCommand(cmd[0], join(cmd[1:], " "))
     endif
   endif
   if g:promptdebug_override_f_and_bt
@@ -1217,8 +1218,20 @@ func s:GetLineExtmarks(b, ns, idx)
   return nvim_buf_get_extmarks(a:b, a:ns, [a:idx, 0], [a:idx, len(line)], #{details: v:true})
 endfunc
 
-func s:PrintCommand(expr)
-  let Cb = function('s:ShowVar', [a:expr])
+func s:PrintCommand(cmd, expr)
+  let format = 'natural'
+  let slash = stridx(a:cmd, '/')
+  if slash > 0
+    let key = a:cmd[slash+1:]
+    let format_map = {'x': 'hexadecimal', 'd': 'decimal',
+          \ 'o': 'octal', 't': 'binary', 'z': 'zero-hexadecimal'}
+    if !has_key(format_map, key)
+      return s:PromptShowWarning("Unkown format: " .. a:cmd)
+    endif
+    let format = format_map[key]
+  endif
+
+  let Cb = function('s:ShowFormatVar', [format, a:expr])
   call s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(a:expr), Cb)
 endfunc
 
@@ -1257,9 +1270,16 @@ func s:ShowVarAt(lnum, nesting, display_name, dict)
   call s:ShowElided(a:lnum, new_var)
 endfunc
 
-func s:ShowVar(display_name, dict)
+func s:ShowFormatVar(format, display_name, dict)
   let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
-  call s:ShowVarAt(lnum, 0, a:display_name, a:dict)
+
+  if a:format != 'natural'
+    let Cb = function('s:ShowEvaluation', [lnum, 0, a:display_name]) 
+    let cmd = printf('-var-set-format %s %s', a:dict['name'], a:format)
+    call s:SendMICommand(cmd, Cb)
+  else
+    call s:ShowVarAt(lnum, 0, a:display_name, a:dict)
+  endif
 endfunc
 
 func s:ShowElided(lnum, var)
