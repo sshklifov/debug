@@ -1162,6 +1162,20 @@ func s:InfoCommand()
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_t]])
   let feature = ["  info (partial): ", "Normal"]
   call s:PromptShowMessage([feature, enabled[g:promptdebug_override_info]])
+  let feature = ["  Enable reverse engineering commands: ", "Normal"]
+  call s:PromptShowMessage([feature, enabled[g:promptdebug_reverse_eng]])
+
+  call s:PromptShowNormal("Current options are set:")
+  let option = ["  Execute unsupported commands silently: ", "Normal"]
+  call s:PromptShowMessage([option, enabled[g:promptdebug_silent_mode]])
+  let option = ["  Display source tags when program stops: ", "Normal"]
+  call s:PromptShowMessage([option, enabled[g:promptdebug_show_source]])
+  let option = ["  Check if executable is out-of-date: ", "Normal"]
+  call s:PromptShowMessage([option, enabled[g:promptdebug_check_timestamps]])
+  let option = ["  Capture stdout in a buffer: ", "Normal"]
+  call s:PromptShowMessage([option, enabled[g:promptdebug_program_output]])
+  let option = ["  Filter 'info threads' with jumpable threads only: ", "Normal"]
+  call s:PromptShowMessage([option, enabled[g:promptdebug_thread_filter]])
 endfunc
 " }}}
 
