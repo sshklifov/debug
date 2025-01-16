@@ -43,6 +43,13 @@ call s:DefineOption('g:promptdebug_program_output', 1)
 " Filter 'info threads' output by displaying jumpable threads only
 call s:DefineOption('g:promptdebug_thread_filter', 1)
 
+" Enable binary reverse engineering features.
+call s:DefineOption('g:promptdebug_reverse_eng', 1)
+
+" Silently execute unsupported commands. Alternative is to show them in a floating window.
+" Enabled by default because it is slightly buggy/annoying.
+call s:DefineOption('g:promptdebug_silent_mode', 1)
+
 " Highlights for sign column
 hi default link debugPrompt Bold
 hi default link debugPC CursorLine
@@ -861,8 +868,6 @@ func s:PromptOutput(cmd)
     else
       return s:PromptShowError("No breakpoints from previous are saved!")
     endif
-  elseif name == "map"
-    return s:MapCommand(cmd[1:])
   endif
 
   " Overriding GDB commands
@@ -937,15 +942,29 @@ func s:PromptOutput(cmd)
     endif
   endif
 
+  if cmd[0]->s:IsCommand("show", 3)
+    return s:ShowCommand(get(cmd, 1, ''))
+  elseif cmd[0]->s:IsCommand("set", 3)
+    return s:SetCommand(join(cmd[1:]))
+  endif
+
+  if g:promptdebug_reverse_eng
+    if cmd[0]->s:IsCommand("continue_link", 10) || cmd[0] == "cl"
+      return s:ContinueLinkCommand()
+    elseif cmd[0]->s:IsCommand("map", 3)
+      return s:MapCommand(cmd[1:])
+    endif
+  endif
+
   " Good 'ol GDB commands
   let cmd_console = '-interpreter-exec console ' . s:EscapeMIArgument(a:cmd)
-  if name->s:IsCommand("info", 3)
+  if g:promptdebug_silent_mode
+    " Run silently and report errors only.
+    return s:SendMICommandNoOutput(cmd_console)
+  else
     " Run command and redirect output to floating window
     let s:floating_output = 1
     return s:SendMICommand(cmd_console, function('s:StopFloatingOutput'))
-  else
-    " Run silently and report errors only
-    return s:SendMICommandNoOutput(cmd_console)
   endif
 endfunc
 
@@ -996,6 +1015,15 @@ func s:RestoreBreakpoints(where)
     call s:SendMICommand("-break-insert " .. s:EscapeMIArgument(locs[idx]), Cb)
   endfor
   call s:PromptShowNormal("Inserted " .. len(locs) .. " breakpoint(s).")
+endfunc
+
+func s:ContinueLinkCommand()
+  if !exists('s:lr_wpt_number')
+    call s:SendMICommand('-data-evaluate-expression $lr', function('s:HandleLinkRegisterValue'))
+  else
+    let Cb = {_ -> s:SendMICommandNoOutput('-exec-continue')}
+    call s:SendMICommand('-break-enable ' .. s:lr_wpt_number, Cb)
+  endif
 endfunc
 
 func s:MapCommand(arg)
@@ -1103,6 +1131,15 @@ func s:InfoVarsCommand()
   let msg = "Command is disabled because it is slow."
   let msg ..= " Did you mean 'info locals' or 'info args'?"
   call s:PromptShowError(msg)
+endfunc
+
+func s:ShowCommand(what)
+  let Cb = {dict -> s:PromptShowNormal(dict['value'])}
+  call s:SendMICommand('-gdb-show ' .. a:what, Cb)
+endfunc
+
+func s:SetCommand(what)
+  call s:SendMICommandNoOutput('-gdb-set ' .. a:what)
 endfunc
 
 func s:InfoCommand()
@@ -1571,6 +1608,24 @@ func s:HandleStream(msg)
   endif
 endfunc
 
+func s:OnInferiorStopped(dict)
+  let reason = get(a:dict, 'reason', '')
+  if reason == 'breakpoint-hit'
+    let bkptno = a:dict['bkptno']
+    " Execute breakpoint commands
+    if has_key(s:breakpoints, bkptno)
+      let bkpt = s:breakpoints[bkptno]
+      for cmd in bkpt['script']
+        call s:PromptOutput(cmd)
+      endfor
+    endif
+  elseif reason == 'watchpoint-trigger'
+    if exists('s:lr_wpt_number') && s:lr_wpt_number == a:dict['wpt']['number']
+      call s:SendMICommandNoOutput('-break-disable ' .. s:lr_wpt_number)
+    endif
+  endif
+endfunc
+
 " Handle stopping and running message from gdb.
 " Will update the sign that shows the current position.
 func s:HandleCursor(class, dict)
@@ -1587,19 +1642,9 @@ func s:HandleCursor(class, dict)
       endif
       let s:selected_thread = a:dict['thread-id']
     endif
-    " XXX: Not too pretty to put it here (or anywhere for that matter)
-    " Execute breakpoint commands
-    if get(a:dict, 'reason', '') == 'breakpoint-hit'
-      let bkptno = a:dict['bkptno']
-      if has_key(s:breakpoints, bkptno)
-        let bkpt = s:breakpoints[bkptno]
-        for cmd in bkpt['script']
-          call s:PromptOutput(cmd)
-        endfor
-      endif
-    endif
     let s:stopped = 1
     let s:selected_frame = 0
+    call s:OnInferiorStopped(a:dict)
   elseif a:class == 'running'
     let id = a:dict['thread-id']
     if id == 'all' || (exists('s:selected_thread') && id == s:selected_thread)
@@ -2168,24 +2213,41 @@ func s:FormatBreakpointMessage(bkpt, parent)
   if !empty(a:parent)
     let enabled = enabled && a:parent['enabled'] == 'y'
   endif
+  let number_item = ["*" .. nr, 'debugIdentifier']
   let jumpable = has_key(a:bkpt, 'fullname') && filereadable(a:bkpt['fullname'])
 
-  if has_key(a:bkpt, 'at')
-    let location = a:bkpt['at']
-  elseif has_key(a:bkpt, 'func')
-    let location = a:bkpt['func']
-  elseif jumpable
-    let basename = fnamemodify(a:bkpt['fullname'], ':t')
-    let location = basename .. ":" .. a:bkpt['line']
+  let type = a:bkpt['type']
+  if stridx(type, "watchpoint") >= 0
+    let what_item = [string(a:bkpt['what']), 'Bold']
+    if type[:2] == "acc"
+      let cond_item = [" is accessed", "Normal"]
+    elseif type[:3] == "read"
+      let cond_item = [" is read", "Normal"]
+    else
+      let cond_item = [" is written", "Normal"]
+    endif
+    call s:PromptShowMessage([number_item, [" when ", "Normal"], what_item, cond_item])
+  elseif type == "catchpoint"
+    let what_item = [a:bkpt['what'], 'Bold']
+    call s:PromptShowMessage([number_item, [" on ", "Normal"], what_item])
   else
-    let location = get(a:bkpt, 'addr', '???')
+    if has_key(a:bkpt, 'at')
+      let location = a:bkpt['at']
+    elseif has_key(a:bkpt, 'func')
+      let location = a:bkpt['func']
+    elseif jumpable
+      let basename = fnamemodify(a:bkpt['fullname'], ':t')
+      let location = basename .. ":" .. a:bkpt['line']
+    else
+      let location = get(a:bkpt, 'addr', '???')
+    endif
+
+    let in_item = [" in ", 'Normal']
+    let location_item = [location, jumpable && enabled ? 'debugJumpable' : 'debugLocation']
+
+    call s:PromptShowMessage([number_item, in_item, location_item])
   endif
 
-  let number_item = ["*" .. nr, 'debugIdentifier']
-  let in_item = [" in ", 'Normal']
-  let location_item = [location, jumpable && enabled ? 'debugJumpable' : 'debugLocation']
-
-  call s:PromptShowMessage([number_item, in_item, location_item])
   if !enabled
     let ns = nvim_create_namespace('PromptDebugHighlight')
     let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
@@ -2458,9 +2520,28 @@ func s:HandleFrameJump(level, dict)
   call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
 endfunc
 
+func s:HandleLinkRegisterValue(dict)
+  let str_value = a:dict['value']
+  let int_value = str2nr(str_value)
+  let supports_bl = (str_value == int_value)
+  if supports_bl
+    call s:PromptShowNormal("A special watchpoint is going to be inserted to service the request.")
+    call s:SendMICommand('-break-watch $lr', function('s:HandleLinkRegisterWatch'))
+  else
+    call s:PromptShowError("Not supported on target")
+  endif
+endfunc
+
+func s:HandleLinkRegisterWatch(dict)
+  let s:lr_wpt_number = a:dict['wpt']['number']
+  " Finally, complete the request by advancing to the next bl instruction.
+  call s:SendMICommandNoOutput('-exec-continue')
+endfunc
+
 func s:HandleFrameMap(dir, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   let files_bunch = s:LocateFrameFiles(frames, a:dir)
+  let failed_basenames = #{}
   let rules = []
   for frame in frames
     if !has_key(frame, 'fullname')
@@ -2470,23 +2551,36 @@ func s:HandleFrameMap(dir, dict)
     if filereadable(fullname)
       continue
     endif
+    let fullname = resolve(fullname)
     let basename = fnamemodify(fullname, ':t')
+    if has_key(failed_basenames, basename)
+      continue
+    endif
     let targets = filter(copy(files_bunch), 'fnamemodify(v:val, ":t") == basename')
     if empty(targets)
       continue
     endif
-    let rule = s:PathSubstitute(fullname, targets[0])
-    if index(rules, rule) < 0
-      if len(targets) > 1
-        call s:PromptShowWarning("Multiple substitutions for " .. basename .. " possible.")
+    if len(targets) > 1
+      call s:PromptShowWarning("Multiple substitutions possible for " .. basename)
+      for target in targets[:3]
+        call s:PromptShowNormal("Found in " .. target)
+      endfor
+      let failed_basenames[basename] = 1
+    else
+      let rule = s:PathSubstitute(fullname, targets[0])
+      if index(rules, rule) < 0
+        call add(rules, rule)
       endif
-      call add(rules, rule)
     endif
   endfor
-
+  let total_failed = len(failed_basenames)
+  if total_failed > 0
+    call s:PromptShowWarning("Failed to insert " .. total_failed .. " mappings!")
+  endif
   for rule in rules
     let [from, to] = rule
     let cmd = printf('-gdb-set substitute-path %s %s', from, to)
+    call s:PromptShowNormal(printf('Map %s -> %s.', from, to))
     call s:SendMICommandNoOutput(cmd)
   endfor
   if len(rules) > 0
