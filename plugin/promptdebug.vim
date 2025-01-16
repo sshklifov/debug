@@ -318,6 +318,7 @@ func PromptDebugStart(...)
   let s:vars = #{}
   let s:thread_ids = #{}
   let s:breakpoints = #{}
+  let s:libraries = #{}
   let s:multi_brs = #{}
   let s:callbacks = #{}
   let s:silent_tokens = #{}
@@ -930,7 +931,7 @@ func s:PromptOutput(cmd)
         return s:InfoThreadsCommand(get(cmd, 2, ''))
       elseif cmd[1]->s:IsCommand("breakpoints", 1)
         return s:InfoBreakpointsCommand(get(cmd, 2, ''))
-      elseif cmd[1]->s:IsCommand("stack", 1)
+      elseif cmd[1]->s:IsCommand("stack", 1) || cmd[1] == 's'
         return s:BacktraceCommand(get(cmd, 2, ''))
       elseif cmd[1]->s:IsCommand('locals', 2)
         return s:InfoLocalsCommand(get(cmd, 2, ''))
@@ -938,12 +939,14 @@ func s:PromptOutput(cmd)
         return s:InfoArgsCommand(get(cmd, 2, ''))
       elseif cmd[1]->s:IsCommand('variables', 2)
         return s:InfoVarsCommand()
+      elseif cmd[1]->s:IsCommand('symbol', 2)
+        return s:PrintCommand("p", join(cmd[2:]))
       endif
     endif
   endif
 
   if cmd[0]->s:IsCommand("show", 3)
-    return s:ShowCommand(get(cmd, 1, ''))
+    return s:ShowCommand(join(cmd[1:]))
   elseif cmd[0]->s:IsCommand("set", 3)
     return s:SetCommand(join(cmd[1:]))
   endif
@@ -1134,8 +1137,7 @@ func s:InfoVarsCommand()
 endfunc
 
 func s:ShowCommand(what)
-  let Cb = {dict -> s:PromptShowNormal(dict['value'])}
-  call s:SendMICommand('-gdb-show ' .. a:what, Cb)
+  call s:SendMICommand('-gdb-show ' .. a:what, function('s:HandleShow', [0]))
 endfunc
 
 func s:SetCommand(what)
@@ -1323,6 +1325,8 @@ endfunc
 
 func s:ShowFormatVar(format, display_name, dict)
   let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
+  " Make sure it will be deleted.
+  let s:vars[a:dict['name']] = a:dict
 
   if a:format != 'natural'
     let Cb = function('s:ShowEvaluation', [lnum, 0, a:display_name]) 
@@ -1573,6 +1577,10 @@ func s:HandleAsync(msg)
     return s:HandleBreakpointDelete(dict)
   elseif async == 'cmd-param-changed'
     return s:HandleOption(dict)
+  elseif async == 'library-loaded'
+    return s:HandleLibraryLoaded(dict)
+  elseif async == 'library-unloaded'
+    return s:HandleLibraryUnloaded(dict)
   endif
 endfunc
 
@@ -2008,6 +2016,23 @@ func s:HandleOption(dict)
     let s:max_completions = a:dict['value']
   endif
 endfunc
+
+func s:HandleLibraryLoaded(dict)
+  let id = a:dict['id']
+  let str_ranges = a:dict['ranges']
+  let ranges = []
+  for str_range in str_ranges
+    let from = str2nr(str_range['from'], 16)
+    let to = str2nr(str_range['to'], 16)
+    call add(ranges, [from, to])
+  endfor
+  let s:libraries[id] = ranges
+endfunc
+
+func s:HandleLibraryUnloaded(dict)
+  let id = a:dict['id']
+  unlet s:libraries[id]
+endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Eval""""""""""""""""""""""""""""""""""""""""""{{{
@@ -2337,6 +2362,27 @@ func s:HandleStackVariables(arg, pat, dict)
   endfor
 endfunc
 
+func s:HandleShow(depth, dict)
+  let width = getbufvar(s:prompt_bufnr, '&sw')
+  let indent = repeat(" ", a:depth * width)
+
+  if has_key(a:dict, 'value')
+    call s:PromptShowNormal(indent .. a:dict['value'])
+  elseif has_key(a:dict, 'showlist')
+    let options = s:GetListWithKeys(a:dict, 'showlist')
+    let child_indent = indent .. repeat(" ", width)
+    for option in options
+      if has_key(option, 'showlist')
+        call s:PromptShowNormal(indent .. option['prefix'])
+        call s:HandleShow(a:depth + 1, option)
+      else
+        let value = printf('%s = %s', option['name'], option['value'])
+        call s:PromptShowNormal(child_indent .. value)
+      endif
+    endfor
+  endif
+endfunc
+
 func s:HandleVarChildren(lnum, parent_var, dict)
   if !has_key(a:dict, "children")
     return
@@ -2535,10 +2581,8 @@ func s:HandleFrameJump(level, dict)
 endfunc
 
 func s:HandleLinkRegisterValue(dict)
-  let str_value = a:dict['value']
-  let int_value = str2nr(str_value)
-  let supports_bl = (str_value == int_value)
-  if supports_bl
+  let value = str2nr(a:dict['value'])
+  if value != 0
     call s:PromptShowNormal("A special watchpoint is going to be inserted to service the request.")
     call s:SendMICommand('-break-watch $lr', function('s:HandleLinkRegisterWatch'))
   else
