@@ -1303,7 +1303,7 @@ func s:FindPrettyPrinter(dict)
   return ""
 endfunc
 
-func s:ShowVarAt(lnum, nesting, display_name, dict)
+func s:RegisterNewVar(dict, display_name, ...)
   let new_var = #{}
 
   let value = get(a:dict, "value", "")
@@ -1313,28 +1313,27 @@ func s:ShowVarAt(lnum, nesting, display_name, dict)
   let new_var["value"] = value
   let new_var["type"] = get(a:dict, 'type', '')
   let new_var['expandable'] = a:dict['numchild'] > 0
-  let new_var['nesting'] = a:nesting
+  let new_var['nesting'] = get(a:000, 0, 0)
   let new_var['display_name'] = a:display_name
   let new_var['created'] = !has_key(a:dict, 'exp')
   let new_var['gdb_handle'] = a:dict['name']
 
   let s:vars[new_var['gdb_handle']] = new_var
+  return new_var
+endfunc
 
+func s:ShowVarAt(lnum, nesting, display_name, dict)
+  let var = s:RegisterNewVar(a:dict, a:display_name, a:nesting)
   call s:ShowElided(a:lnum, new_var)
 endfunc
 
 func s:ShowFormatVar(format, display_name, dict)
   let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
-  " Make sure it will be deleted.
-  let s:vars[a:dict['name']] = a:dict
-
-  if a:format != 'natural'
-    let Cb = function('s:ShowEvaluation', [lnum, 0, a:display_name]) 
-    let cmd = printf('-var-set-format %s %s', a:dict['name'], a:format)
-    call s:SendMICommand(cmd, Cb)
-  else
-    call s:ShowVarAt(lnum, 0, a:display_name, a:dict)
-  endif
+  let nesting = 0
+  let var = s:RegisterNewVar(a:dict, a:display_name, nesting)
+  let Cb = function('s:ShowEvaluation', [lnum, nesting, a:display_name]) 
+  let cmd = printf('-var-set-format %s %s', a:dict['name'], a:format)
+  call s:SendMICommand(cmd, Cb)
 endfunc
 
 func s:ShowElided(lnum, var)
@@ -2255,7 +2254,7 @@ func s:FormatBreakpointMessage(bkpt, parent)
   let number_item = ["*" .. nr, 'debugIdentifier']
   let jumpable = has_key(a:bkpt, 'fullname') && filereadable(a:bkpt['fullname'])
 
-  let type = a:bkpt['type']
+  let type = get(a:bkpt, 'type', '')
   if stridx(type, "watchpoint") >= 0
     let what_item = [string(a:bkpt['what']), 'Bold']
     if type[:2] == "acc"
@@ -2358,7 +2357,7 @@ func s:HandleStackVariables(arg, pat, dict)
   call map(vars, "v:val.name")
   call filter(vars, "stridx(v:val, a:pat) >= 0")
   for var in vars
-    call s:PrintCommand(var)
+    call s:PrintCommand("p", var)
   endfor
 endfunc
 
