@@ -231,12 +231,6 @@ func s:SendMICommand(cmd, Callback)
   call chansend(s:gdb_job_id, cmd . "\n")
 endfunc
 
-function s:SendMICommandQuiet(cmd, Callback)
-  let token = s:token_counter
-  let s:silent_tokens[token] = 1
-  call s:SendMICommand(a:cmd, a:Callback)
-endfunction
-
 function s:SendMICommandNoOutput(cmd)
   let IgnoreOutput = {_ -> {}}
   return s:SendMICommand(a:cmd, IgnoreOutput)
@@ -321,7 +315,6 @@ func PromptDebugStart(...)
   let s:libraries = #{}
   let s:multi_brs = #{}
   let s:callbacks = #{}
-  let s:silent_tokens = #{}
   let s:files_warned = #{}
   let s:floating_output = 0
   let s:source_bufnr = -1
@@ -485,7 +478,7 @@ func s:ProgramOutput(job_id, msgs, event)
       if exists('s:user')
         call system(["ssh", s:host, "chmod", "666", tty])
         if v:shell_error
-          call s:PromptShowWarning("Failed to change permissions for controlling tty.")
+          call s:ShowWarning("Failed to change permissions for controlling tty.")
         endif
       endif
       call s:LaunchGdb(tty)
@@ -501,7 +494,7 @@ endfunc
 
 func s:CommReset(timer_id)
   let s:comm_buf = ""
-  call s:PromptShowWarning("Communication with GDB reset")
+  call s:ShowWarning("Communication with GDB reset")
 endfunc
 
 func s:CommJoin(job_id, msgs, event)
@@ -541,7 +534,7 @@ endfunc
 func s:CtrlC_Map()
   if !empty(s:GetPrompt())
     let input = getbufline(s:prompt_bufnr, '$')[0]
-    call s:PromptShowMessage([[input, "Normal"], ["^C", "Cursor"]])
+    call s:ShowMessage([[input, "Normal"], ["^C", "Cursor"]])
     call s:SetPrompt("")
   elseif exists('s:pid')
     " Send interrupt
@@ -554,7 +547,7 @@ func s:CtrlC_Map()
       call system(["ssh", s:host, kill])
     endif
   else
-    call s:PromptShowError("Program is not started")
+    call s:ShowError("Program is not started")
   endif
 endfunc
 
@@ -676,7 +669,7 @@ func s:EnterMap()
     return
   endif
   let cmd = s:GetPrompt()
-  call s:PromptShowNormal(getline('$'))
+  call s:ShowNormal(getline('$'))
   call s:SetPrompt('')
   if cmd =~ '\S'
     " Add to history and run command
@@ -851,11 +844,11 @@ func s:PromptOutput(cmd)
 
   " Unsupported commands
   if name->s:IsCommand("python", 2)
-    return s:PromptShowError("No python support!")
+    return s:ShowError("No python support!")
   elseif name[0] == "!" || name->s:IsCommand("shell", 3)
-    return s:PromptShowError("No shell support!")
+    return s:ShowError("No shell support!")
   elseif name->s:IsCommand("edit", 2)
-    return s:PromptShowError("No edit support!")
+    return s:ShowError("No edit support!")
   endif
 
   " Custom commands
@@ -867,7 +860,7 @@ func s:PromptOutput(cmd)
     elseif exists('s:auto_saved_brs')
       return s:RestoreBreakpoints('auto_saved_brs')
     else
-      return s:PromptShowError("No breakpoints from previous are saved!")
+      return s:ShowError("No breakpoints from previous are saved!")
     endif
   endif
 
@@ -977,7 +970,7 @@ endfunc
 
 func s:CommandsCommand(brs)
   if len(a:brs) > 1
-    return s:PromptShowError("Expecting 1 breakpoint at most.")
+    return s:ShowError("Expecting 1 breakpoint at most.")
   endif
   if empty(a:brs)
     let bp = string(max(keys(s:breakpoints)))
@@ -985,7 +978,7 @@ func s:CommandsCommand(brs)
     let bp = a:brs[0]
   endif
   if !has_key(s:breakpoints, bp)
-    call s:PromptShowError("Cannot set commands for breakpoint " .. bp)
+    call s:ShowError("Cannot set commands for breakpoint " .. bp)
   else
     let script = s:Get(s:breakpoints, bp, 'script', [])
     call s:OpenFloatEdit(30, 3, script)
@@ -999,7 +992,7 @@ endfunc
 func s:SaveBreakpoints(where)
   let valid_brs = filter(values(s:breakpoints), 'has_key(v:val, "fullname")')
   if empty(valid_brs)
-    return s:PromptShowError("No breakpoints.")
+    return s:ShowError("No breakpoints.")
   endif
   let saved_br_locs = map(copy(valid_brs), 'v:val.fullname .. ":" .. v:val.lnum')
   let saved_br_cmds = map(valid_brs, 'get(v:val, "script", [])')
@@ -1009,7 +1002,7 @@ endfunc
 func s:RestoreBreakpoints(where)
   let br_state = get(s:, a:where, [])
   if empty(br_state)
-    return s:PromptShowError("No breakpoints are saved!")
+    return s:ShowError("No breakpoints are saved!")
   endif
   let locs = br_state[0]
   let cmds = br_state[1]
@@ -1017,7 +1010,7 @@ func s:RestoreBreakpoints(where)
     let Cb = function('s:HandleNewBreakpoint', [cmds[idx]])
     call s:SendMICommand("-break-insert " .. s:EscapeMIArgument(locs[idx]), Cb)
   endfor
-  call s:PromptShowNormal("Inserted " .. len(locs) .. " breakpoint(s).")
+  call s:ShowNormal("Inserted " .. len(locs) .. " breakpoint(s).")
 endfunc
 
 func s:ContinueLinkCommand()
@@ -1133,7 +1126,7 @@ endfunc
 func s:InfoVarsCommand()
   let msg = "Command is disabled because it is slow."
   let msg ..= " Did you mean 'info locals' or 'info args'?"
-  call s:PromptShowError(msg)
+  call s:ShowError(msg)
 endfunc
 
 func s:ShowCommand(what)
@@ -1145,49 +1138,49 @@ func s:SetCommand(what)
 endfunc
 
 func s:InfoCommand()
-  call s:PromptShowNormal("Current overrides are in place:")
+  call s:ShowNormal("Current overrides are in place:")
   let enabled = [["Disabled", "DiagnosticError"], ["OK", "DiagnosticOk"]]
 
   let feature = ["  brsave and brsource to reuse breakpoints between sessions: ", "Normal"]
-  call s:PromptShowMessage([feature, enabled[v:true]])
+  call s:ShowMessage([feature, enabled[v:true]])
   let feature = ["  finish and return are locked to the same thread: ", "Normal"]
-  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_finish_and_return]])
+  call s:ShowMessage([feature, enabled[g:promptdebug_override_finish_and_return]])
   let feature = ["  up and down skip frames with no symbols: ", "Normal"]
-  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_up_and_down]])
+  call s:ShowMessage([feature, enabled[g:promptdebug_override_up_and_down]])
   let feature = ["  stepping switches between assembly and source: ", "Normal"]
-  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_s_and_n]])
+  call s:ShowMessage([feature, enabled[g:promptdebug_override_s_and_n]])
   let feature = ["  print via expansion: ", "Normal"]
-  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_p]])
+  call s:ShowMessage([feature, enabled[g:promptdebug_override_p]])
   let feature = ["  frame and backtrace with jumps: ", "Normal"]
-  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_f_and_bt]])
+  call s:ShowMessage([feature, enabled[g:promptdebug_override_f_and_bt]])
   let feature = ["  thread with jumps: ", "Normal"]
-  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_t]])
+  call s:ShowMessage([feature, enabled[g:promptdebug_override_t]])
   let feature = ["  info (partial): ", "Normal"]
-  call s:PromptShowMessage([feature, enabled[g:promptdebug_override_info]])
+  call s:ShowMessage([feature, enabled[g:promptdebug_override_info]])
   let feature = ["  Enable reverse engineering commands: ", "Normal"]
-  call s:PromptShowMessage([feature, enabled[g:promptdebug_reverse_eng]])
+  call s:ShowMessage([feature, enabled[g:promptdebug_reverse_eng]])
 
-  call s:PromptShowNormal("Current options are set:")
+  call s:ShowNormal("Current options are set:")
   let option = ["  Execute unsupported commands silently: ", "Normal"]
-  call s:PromptShowMessage([option, enabled[g:promptdebug_silent_mode]])
+  call s:ShowMessage([option, enabled[g:promptdebug_silent_mode]])
   let option = ["  Display source tags when program stops: ", "Normal"]
-  call s:PromptShowMessage([option, enabled[g:promptdebug_show_source]])
+  call s:ShowMessage([option, enabled[g:promptdebug_show_source]])
   let option = ["  Check if executable is out-of-date: ", "Normal"]
-  call s:PromptShowMessage([option, enabled[g:promptdebug_check_timestamps]])
+  call s:ShowMessage([option, enabled[g:promptdebug_check_timestamps]])
   let option = ["  Capture stdout in a buffer: ", "Normal"]
-  call s:PromptShowMessage([option, enabled[g:promptdebug_program_output]])
+  call s:ShowMessage([option, enabled[g:promptdebug_program_output]])
   let option = ["  Filter 'info threads' with jumpable threads only: ", "Normal"]
-  call s:PromptShowMessage([option, enabled[g:promptdebug_thread_filter]])
+  call s:ShowMessage([option, enabled[g:promptdebug_thread_filter]])
 endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""Printing""""""""""""""""""""""""""""""""""""""{{{
-func s:PromptShowMessage(msg)
+func s:ShowMessage(msg)
   let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
-  call s:PromptAppendMessage(lnum, a:msg)
+  call s:AppendMessage(lnum, a:msg)
 endfunc
 
-func s:PromptAppendMessage(lnum, msg)
+func s:AppendMessage(lnum, msg)
   let line = join(map(copy(a:msg), "v:val[0]"), '')
   call appendbufline(s:prompt_bufnr, a:lnum, line)
 
@@ -1203,19 +1196,19 @@ func s:PromptAppendMessage(lnum, msg)
   endfor
 endfunc
 
-func s:PromptShowNormal(msg)
-  call s:PromptShowMessage([[a:msg, "Normal"]])
+func s:ShowNormal(msg)
+  call s:ShowMessage([[a:msg, "Normal"]])
 endfunc
 
-func s:PromptShowWarning(msg)
-  call s:PromptShowMessage([[a:msg, "WarningMsg"]])
+func s:ShowWarning(msg)
+  call s:ShowMessage([[a:msg, "WarningMsg"]])
 endfunc
 
-func s:PromptShowError(msg)
-  call s:PromptShowMessage([[a:msg, "ErrorMsg"]])
+func s:ShowError(msg)
+  call s:ShowMessage([[a:msg, "ErrorMsg"]])
 endfunc
 
-func s:PromptShowSourceLine(tag_string)
+func s:ShowSourceLine(tag_string)
   let lnum = line('.')
   let source_line = getline(lnum)
   let leading_spaces = len(matchstr(source_line, '^\s*'))
@@ -1234,7 +1227,7 @@ func s:PromptShowSourceLine(tag_string)
     endif
   endfor
   call add(items, [text, text_hl])
-  call s:PromptShowMessage(items)
+  call s:ShowMessage(items)
 
   const col_reshift = len(items[0][0]) + len(items[1][0]) - leading_spaces
   const col_max = len(join(map(items, "v:val[0]"), ""))
@@ -1279,7 +1272,7 @@ func s:PrintCommand(cmd, expr)
     let format_map = {'x': 'hexadecimal', 'd': 'decimal',
           \ 'o': 'octal', 't': 'binary', 'z': 'zero-hexadecimal'}
     if !has_key(format_map, key)
-      return s:PromptShowWarning("Unkown format: " .. a:cmd)
+      return s:ShowWarning("Unkown format: " .. a:cmd)
     endif
     let format = format_map[key]
   endif
@@ -1343,7 +1336,7 @@ func s:ShowElided(lnum, var)
   let indent_item = [indent, "Normal"]
   let name_item = [a:var['display_name'] .. " = ", "Normal"]
   let value_item = [a:var['value'], "debugValue"]
-  call s:PromptAppendMessage(a:lnum, [indent_item, name_item, value_item])
+  call s:AppendMessage(a:lnum, [indent_item, name_item, value_item])
 
   " Mark the variable
   if a:var['expandable']
@@ -1420,14 +1413,14 @@ func s:JumpCursor(lnum)
   let keys = map(extmarks[0][3]['virt_text'], 'v:val[0]')
   if len(keys) == 1
     " Frame jump
-    call s:PromptShowNormal(prompt_getprompt(s:prompt_bufnr))
-    call s:PromptShowNormal("Jumping to frame #" .. keys[0])
+    call s:ShowNormal(prompt_getprompt(s:prompt_bufnr))
+    call s:ShowNormal("Jumping to frame #" .. keys[0])
     call s:FrameCommand(keys[0])
   elseif len(keys) == 2
     if keys[0] =~ '^[0-9]' && keys[1] =~ '^[0-9]'
       " Thread jump
-      call s:PromptShowNormal(prompt_getprompt(s:prompt_bufnr))
-      call s:PromptShowNormal("Jumping to thread ~" .. keys[0])
+      call s:ShowNormal(prompt_getprompt(s:prompt_bufnr))
+      call s:ShowNormal("Jumping to thread ~" .. keys[0])
       let Cb = function('s:HandleThreadJump', [keys[1]])
       call s:SendMICommand('-thread-select ' .. s:EscapeMIArgument(keys[0]), Cb)
     else
@@ -1595,13 +1588,7 @@ func s:HandleResult(msg)
       echom "Unhandled record!"
     endif
   elseif result == 'error'
-    if str2nr(token) > 0
-      if !has_key(s:silent_tokens, token)
-        return s:HandleError(dict)
-      else
-        unlet s:silent_tokens[token]
-      endif
-    endif
+    return s:HandleError(dict)
   endif
 endfunc
 
@@ -1659,7 +1646,7 @@ func s:HandleCursor(class, dict)
     if has_key(a:dict, 'thread-id')
       " Show a message that the thread has changed
       if !exists('s:selected_thread') || s:selected_thread != a:dict['thread-id']
-        call s:PromptShowNormal("Switching to thread ~" .. a:dict['thread-id'])
+        call s:ShowNormal("Switching to thread ~" .. a:dict['thread-id'])
       endif
       let s:selected_thread = a:dict['thread-id']
     endif
@@ -1694,7 +1681,7 @@ func s:ShowStopReason(dict)
   endif
 
   " This makes a huge difference visually
-  call s:PromptShowNormal("")
+  call s:ShowNormal("")
 
   if reason == 'breakpoint-hit'
     let msg = "Breakpoint hit."
@@ -1705,20 +1692,20 @@ func s:ShowStopReason(dict)
   elseif reason =~ 'watchpoint'
     let msg = "Watchpoint hit"
   elseif reason == 'exited-signalled'
-    return s:PromptShowWarning("Process exited due to signal: " .. a:dict['signal-name'])
+    return s:ShowWarning("Process exited due to signal: " .. a:dict['signal-name'])
   elseif reason == 'exited'
-    return s:PromptShowWarning("Process exited with code " .. a:dict['exit-code'])
+    return s:ShowWarning("Process exited with code " .. a:dict['exit-code'])
   elseif reason == 'exited-normally'
-    return s:PromptShowNormal("Process exited normally. ")
+    return s:ShowNormal("Process exited normally. ")
   elseif reason == 'signal-received'
-    return s:PromptShowNormal("Process received signal: " .. a:dict['signal-name'])
+    return s:ShowNormal("Process received signal: " .. a:dict['signal-name'])
   elseif reason == 'solib-event' || reason =~ 'fork' || reason =~ 'syscall' || reason == 'exec'
     let msg = "Event " .. string(reason)
   else
     let msg = reason
   endif
   let items = [["Stopped", "Italic"], [", reason: " .. msg, "Normal"]]
-  call s:PromptShowMessage(items)
+  call s:ShowMessage(items)
 endfunc
 
 func s:PlaceCursorSign(dict)
@@ -1741,7 +1728,7 @@ func s:CreateExeTimestamp()
   endif
   let s:exe_timestamp = system(cmd)
   if v:shell_error
-    call PromptShowWarning("Failed to determine executable timestamp")
+    call s:ShowWarning("Failed to determine executable timestamp")
     let s:exe_timestamp = localtime()
   endif
 endfunc
@@ -1749,7 +1736,7 @@ endfunc
 func s:WarnFileOnce(file, msg)
   if !has_key(s:files_warned, a:file)
     let s:files_warned[a:file] = 1
-    call s:PromptShowWarning(a:msg)
+    call s:ShowWarning(a:msg)
   endif
 endfunc
 
@@ -1772,14 +1759,14 @@ func s:PlaceSourceCursor(dict)
       exe "e " . fnameescape(filename)
     endif
     if lnum > nvim_buf_line_count(0)
-      return s:PromptShowWarning("Cannot place cursor. Is executable up to date?")
+      return s:ShowWarning("Cannot place cursor. Is executable up to date?")
     endif
     exe lnum
     normal z.
     " Display a hint where we stopped
     if g:promptdebug_show_source
       let tag = string(line('.'))
-      call s:PromptShowSourceLine(tag)
+      call s:ShowSourceLine(tag)
     endif
     " Highlight stopped line
     call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
@@ -1788,7 +1775,7 @@ func s:PlaceSourceCursor(dict)
   elseif !empty(filename)
     call s:WarnFileOnce(filename, "Unknown file: " .. filename)
   else
-    call s:PromptShowNormal("???\tNo source available.")
+    call s:ShowNormal("???\tNo source available.")
   endif
 endfunc
 
@@ -1816,8 +1803,8 @@ func s:SelectAsmAddr(addr, line)
     let ns = nvim_create_namespace('PromptDebugPC')
     " Display a hint where we stopped
     if g:promptdebug_show_source
-      let tag = '<' .. a:line .. '>'
-      call s:PromptShowSourceLine(tag)
+      let tag = a:line
+      call s:ShowSourceLine(tag)
     endif
     call nvim_buf_set_extmark(0, ns, lnum - 1, 0, #{line_hl_group: 'debugPC'})
     let s:source_bufnr = bufnr()
@@ -1845,18 +1832,18 @@ func s:HandleProgramRun(dict)
   let s:pid = a:dict['pid']
   " Add a few introductory lines
   if exists('s:host')
-    call s:PromptShowNormal("Remote debugging " .. s:host)
+    call s:ShowNormal("Remote debugging " .. s:host)
   else
-    call s:PromptShowNormal("Local debugging")
+    call s:ShowNormal("Local debugging")
   endif
-  call s:PromptShowNormal("Process id: " .. s:pid)
+  call s:ShowNormal("Process id: " .. s:pid)
   let cmd = ['stat', '--printf=%G', '/proc/' .. s:pid]
   if exists('s:host')
     let cmd = ["ssh", s:host, join(cmd, ' ')]
   endif
   let user = system(cmd)
   if !v:shell_error
-    call s:PromptShowNormal("Running as: " .. user)
+    call s:ShowNormal("Running as: " .. user)
   endif
 
   " Issue autocmds
@@ -1883,16 +1870,16 @@ func s:HandleNewBreakpoint(def_cmds, dict)
     " Display a message to the user
     if bkpt['type'] == 'catchpoint'
       let msg = printf('Catchpoint %s (%s)', bkpt['number'], bkpt['what'])
-      call s:PromptShowNormal(msg)
+      call s:ShowNormal(msg)
     elseif stridx(bkpt['type'], 'watchpoint') >= 0
       let msg = printf('Watchpoint %s (%s)', bkpt['number'], bkpt['what'])
-      call s:PromptShowNormal(msg)
+      call s:ShowNormal(msg)
     endif
     return
   endif
   if has_key(bkpt, 'pending')
     let normal = 'Breakpoint ' . bkpt['number'] . ' (' . bkpt['pending']  . ') pending.'
-    call s:PromptShowNormal(normal)
+    call s:ShowNormal(normal)
     return
   endif
 
@@ -1994,7 +1981,7 @@ func s:PlaceBreakpointSign(id)
   if bufnr > 0 && !placed
     call bufload(bufnr)
     if breakpoint['lnum'] > nvim_buf_line_count(bufnr)
-      return s:PromptShowWarning("Cannot place breakpoint sign. Is executable up to date?")
+      return s:ShowWarning("Cannot place breakpoint sign. Is executable up to date?")
     endif
     let ns = nvim_create_namespace('PromptDebugBr')
     let text = has_key(breakpoint, 'parent') ? breakpoint['parent'] : a:id
@@ -2223,7 +2210,7 @@ endfunc
 func s:HandleBreakpointTable(show_times, dict)
   let table = s:GetListWithKeys(a:dict['BreakpointTable'], 'body')
   if empty(table)
-    call s:PromptShowError("No breakpoints.")
+    call s:ShowError("No breakpoints.")
     return
   endif
   for bkpt in table
@@ -2232,14 +2219,14 @@ func s:HandleBreakpointTable(show_times, dict)
         call s:FormatBreakpointMessage(location, bkpt)
         if a:show_times
           let str_times = bkpt['times'] == 1 ? "time" : "times"
-          call s:PromptShowNormal(printf("Breakpoint hit %d %s", bkpt['times'], str_times))
+          call s:ShowNormal(printf("Breakpoint hit %d %s", bkpt['times'], str_times))
         endif
       endfor
     else
       call s:FormatBreakpointMessage(bkpt, #{})
       if a:show_times
         let str_times = bkpt['times'] == 1 ? "time" : "times"
-        call s:PromptShowNormal(printf("Breakpoint hit %d %s", bkpt['times'], str_times))
+        call s:ShowNormal(printf("Breakpoint hit %d %s", bkpt['times'], str_times))
       endif
     endif
   endfor
@@ -2264,10 +2251,10 @@ func s:FormatBreakpointMessage(bkpt, parent)
     else
       let cond_item = [" is written", "Normal"]
     endif
-    call s:PromptShowMessage([number_item, [" when ", "Normal"], what_item, cond_item])
+    call s:ShowMessage([number_item, [" when ", "Normal"], what_item, cond_item])
   elseif type == "catchpoint"
     let what_item = [a:bkpt['what'], 'Bold']
-    call s:PromptShowMessage([number_item, [" on ", "Normal"], what_item])
+    call s:ShowMessage([number_item, [" on ", "Normal"], what_item])
   else
     if has_key(a:bkpt, 'at')
       let location = a:bkpt['at']
@@ -2283,7 +2270,7 @@ func s:FormatBreakpointMessage(bkpt, parent)
     let in_item = [" in ", 'Normal']
     let location_item = [location, jumpable && enabled ? 'debugJumpable' : 'debugLocation']
 
-    call s:PromptShowMessage([number_item, in_item, location_item])
+    call s:ShowMessage([number_item, in_item, location_item])
   endif
 
   if !enabled
@@ -2366,17 +2353,17 @@ func s:HandleShow(depth, dict)
   let indent = repeat(" ", a:depth * width)
 
   if has_key(a:dict, 'value')
-    call s:PromptShowNormal(indent .. a:dict['value'])
+    call s:ShowNormal(indent .. a:dict['value'])
   elseif has_key(a:dict, 'showlist')
     let options = s:GetListWithKeys(a:dict, 'showlist')
     let child_indent = indent .. repeat(" ", width)
     for option in options
       if has_key(option, 'showlist')
-        call s:PromptShowNormal(indent .. option['prefix'])
+        call s:ShowNormal(indent .. option['prefix'])
         call s:HandleShow(a:depth + 1, option)
       else
         let value = printf('%s = %s', option['name'], option['value'])
-        call s:PromptShowNormal(child_indent .. value)
+        call s:ShowNormal(child_indent .. value)
       endif
     endfor
   endif
@@ -2427,7 +2414,7 @@ func s:OnEditComplete(bp)
   let commands = getbufline(nr, 1, '$')
   call s:CloseFloatEdit()
   let s:breakpoints[a:bp]['script'] = commands
-  call s:PromptShowNormal("Breakpoint commands updated.")
+  call s:ShowNormal("Breakpoint commands updated.")
 endfunc
 
 func s:HandleSymbolInfo(dict)
@@ -2541,6 +2528,8 @@ func s:FormatFrameMessageWithTag(tag, dict)
   let location = "???"
   if has_key(frame, 'fullname')
     let location = fnamemodify(frame['fullname'], ":t")
+  elseif has_key(frame, 'from')
+    let location = frame['from']
   endif
 
   let tag_item = [a:tag, 'debugIdentifier']
@@ -2556,7 +2545,7 @@ endfunc
 func s:ShowFrame(dict)
   let tag = "#" .. a:dict['level']
   let [jumpable, items] = s:FormatFrameMessageWithTag(tag, a:dict)
-  call s:PromptShowMessage(items)
+  call s:ShowMessage(items)
   if jumpable
     call s:ConcealJump(a:dict['level'])
   endif
@@ -2565,7 +2554,7 @@ endfunc
 func s:ShowThreadFrame(id, dict)
   let tag = "~" .. a:id
   let [jumpable, items] = s:FormatFrameMessageWithTag(tag, a:dict)
-  call s:PromptShowMessage(items)
+  call s:ShowMessage(items)
   if jumpable
     call s:ConcealJump(a:id, a:dict['level'])
   endif
@@ -2582,10 +2571,10 @@ endfunc
 func s:HandleLinkRegisterValue(dict)
   let value = str2nr(a:dict['value'])
   if value != 0
-    call s:PromptShowNormal("A special watchpoint is going to be inserted to service the request.")
+    call s:ShowNormal("A special watchpoint is going to be inserted to service the request.")
     call s:SendMICommand('-break-watch $lr', function('s:HandleLinkRegisterWatch'))
   else
-    call s:PromptShowError("Not supported on target")
+    call s:ShowError("Not supported on target")
   endif
 endfunc
 
@@ -2618,9 +2607,9 @@ func s:HandleFrameMap(dir, dict)
       continue
     endif
     if len(targets) > 1
-      call s:PromptShowWarning("Multiple substitutions possible for " .. basename)
+      call s:ShowWarning("Multiple substitutions possible for " .. basename)
       for target in targets[:3]
-        call s:PromptShowNormal("Found in " .. target)
+        call s:ShowNormal("Found in " .. target)
       endfor
       let failed_basenames[basename] = 1
     else
@@ -2632,19 +2621,19 @@ func s:HandleFrameMap(dir, dict)
   endfor
   let total_failed = len(failed_basenames)
   if total_failed > 0
-    call s:PromptShowWarning("Failed to insert " .. total_failed .. " mappings!")
+    call s:ShowWarning("Failed to insert " .. total_failed .. " mappings!")
   endif
   for rule in rules
     let [from, to] = rule
     let cmd = printf('-gdb-set substitute-path %s %s', from, to)
-    call s:PromptShowNormal(printf('Map %s -> %s.', from, to))
+    call s:ShowNormal(printf('Map %s -> %s.', from, to))
     call s:SendMICommandNoOutput(cmd)
   endfor
   if len(rules) > 0
-    call s:PromptShowNormal("Total " .. len(rules) .. " mappings made.")
+    call s:ShowNormal("Total " .. len(rules) .. " mappings made.")
     call s:WhereCommand()
   else
-    call s:PromptShowNormal("No mappings possible.")
+    call s:ShowNormal("No mappings possible.")
   endif
 endfunc
 
@@ -2708,7 +2697,7 @@ func s:HandleFrameChange(going_up, dict)
   if s:asm_mode
     " Switch directly
     if !empty(frames)
-      call s:PromptShowMessage([["Switching to frame #" .. frames[0]['level'], "Normal"]])
+      call s:ShowMessage([["Switching to frame #" .. frames[0]['level'], "Normal"]])
       call s:RefreshCursorSign(frames[0])
       let s:selected_frame = frames[0]['level']
       return s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
@@ -2717,7 +2706,7 @@ func s:HandleFrameChange(going_up, dict)
     for frame in frames
       let fullname = get(frame, 'fullname', '')
       if filereadable(fullname)
-        call s:PromptShowMessage([["Switching to frame #" .. frame['level'], "Normal"]])
+        call s:ShowMessage([["Switching to frame #" .. frame['level'], "Normal"]])
         call s:RefreshCursorSign(frame)
         let s:selected_frame = frame['level']
         return s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
@@ -2725,9 +2714,9 @@ func s:HandleFrameChange(going_up, dict)
     endfor
   endif
   if a:going_up
-    call s:PromptShowError("At topmost frame")
+    call s:ShowError("At topmost frame")
   else
-    call s:PromptShowError("At bottom of stack")
+    call s:ShowError("At bottom of stack")
   endif
 endfunc
 
@@ -2737,7 +2726,7 @@ func s:HandleError(dict)
   call s:StopFloatingOutput()
   let lines = split(a:dict['msg'], "\n")
   for line in lines
-    call s:PromptShowError(line)
+    call s:ShowError(line)
   endfor
 endfunc
 "}}}
