@@ -470,6 +470,7 @@ endfunc
 func s:ProgramOutput(job_id, msgs, event)
   for msg in a:msgs
     let msg = substitute(msg, '\r\n\?$', '', 'g')
+    let msg = substitute(msg, '\e\[[0-9;]*m', '', 'g')
     if empty(msg) || msg[0:1] == '&"'
       continue
     endif
@@ -1031,20 +1032,20 @@ func s:MountCommand(arg)
 endfunc
 
 func s:MapCommand(arg)
-  let arg = join(a:arg)
+  let pat = join(a:arg)
 
   let pid = PromptDebugGetPid()
   if pid <= 0
     call s:ShowError('No pid!')
     return
   endif
-  let cmd = printf("cat /proc/%d/maps", PromptDebugGetPid())
+  let cmd = printf("cat /proc/%d/maps", pid)
   if exists('s:host')
     let cmd = ["ssh", s:host, cmd]
   endif
   let lines = systemlist(cmd)
-  call filter(lines, 'stridx(v:val, arg) >= 0')
   if !v:shell_error
+    call filter(lines, 'stridx(v:val, pat) >= 0')
     for line in lines
       call s:ShowNormal(line)
     endfor
@@ -1339,49 +1340,47 @@ func s:RegisterNewVar(dict, display_name, ...)
 endfunc
 
 func s:ShowVarAt(lnum, nesting, display_name, dict)
-  let var = s:RegisterNewVar(a:dict, a:display_name, a:nesting)
-  call s:ShowElided(a:lnum, new_var)
+  call s:RegisterNewVar(a:dict, a:display_name, a:nesting)
+  call s:ShowElided(a:lnum, a:dict['name'])
 endfunc
 
 func s:ShowFormatVar(format, display_name, dict)
   let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
-  let nesting = 0
-  let var = s:RegisterNewVar(a:dict, a:display_name, nesting)
-  let Cb = function('s:ShowEvaluation', [lnum, nesting, a:display_name]) 
-  let cmd = printf('-var-set-format %s %s', a:dict['name'], a:format)
-  call s:SendMICommand(cmd, Cb)
-endfunc
-
-func s:ShowElided(lnum, var)
-  let width = getbufvar(s:prompt_bufnr, '&sw')
-  let indent = repeat(" ", a:var['nesting'] * width)
-
-  let indent_item = [indent, "Normal"]
-  let name_item = [a:var['display_name'] .. " = ", "Normal"]
-  let value_item = [a:var['value'], "debugValue"]
-  call s:AppendMessage(a:lnum, [indent_item, name_item, value_item])
-
-  " Mark the variable
-  if a:var['expandable']
-    let items = [[a:var['gdb_handle'], 'EndOfBuffer']]
-    let ns = nvim_create_namespace('PromptDebugConcealVar')
-    call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, 0, #{virt_text: items})
-    " Highlight 'value_item' as debugExpandable
-    let col = len(indent_item[0]) + len(name_item[0])
-    let end_col = col + len(value_item[0])
-    let opts = #{end_col: end_col, hl_group: 'debugExpandable', priority: 10000}
-    call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, col, opts)
+  call s:RegisterNewVar(a:dict, a:display_name)
+  if a:format == 'natural'
+    call s:ShowElided(lnum, a:dict['name'])
+  else
+    let Cb = function('s:ShowEvaluation', [lnum, 0, a:display_name]) 
+    let cmd = printf('-var-set-format %s %s', a:dict['name'], a:format)
+    call s:SendMICommand(cmd, Cb)
   endif
 endfunc
 
-func s:ShowEvaluation(lnum, nesting, name, dict)
-  let fake_var = #{
-        \ nesting: a:nesting,
-        \ display_name: a:name,
-        \ value: a:dict['value'],
-        \ expandable: v:false
-        \ }
-  call s:ShowElided(a:lnum, fake_var)
+func s:ShowEvaluation(lnum, nesting, display_name, dict)
+  let width = getbufvar(s:prompt_bufnr, '&sw')
+  let indent = repeat(" ", a:nesting * width)
+
+  let indent_item = [indent, "Normal"]
+  let name_item = [a:display_name .. " = ", "Normal"]
+  let value_item = [a:dict['value'], "debugValue"]
+  call s:AppendMessage(a:lnum, [indent_item, name_item, value_item])
+  return [len(indent_item[0]), len(name_item[0]), len(value_item[0])]
+endfunc
+
+func s:ShowElided(lnum, var_name)
+  let var = s:vars[a:var_name]
+  let [indent_len, name_len, value_len] = s:ShowEvaluation(a:lnum, var.nesting, var.display_name, var)
+
+  if var.expandable
+    let items = [[var['gdb_handle'], 'EndOfBuffer']]
+    let ns = nvim_create_namespace('PromptDebugConcealVar')
+    call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, 0, #{virt_text: items})
+    " Highlight 'value_item' as debugExpandable
+    let col = indent_len + name_len
+    let end_col = col + value_len
+    let opts = #{end_col: end_col, hl_group: 'debugExpandable', priority: 10000}
+    call nvim_buf_set_extmark(s:prompt_bufnr, ns, a:lnum, col, opts)
+  endif
 endfunc
 
 " Perform an action based on a hidden string message at line
