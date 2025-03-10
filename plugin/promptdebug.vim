@@ -947,7 +947,9 @@ func s:PromptOutput(cmd)
   if g:promptdebug_reverse_eng
     if cmd[0]->s:IsCommand("continue_link", 10) || cmd[0] == "cl"
       return s:ContinueLinkCommand()
-    elseif cmd[0]->s:IsCommand("map", 3)
+    elseif cmd[0]->s:IsCommand("mount", 3)
+      return s:MountCommand(cmd[1:])
+    elseif cmd[0]->s:IsCommand("maps", 3)
       return s:MapCommand(cmd[1:])
     endif
   endif
@@ -1022,10 +1024,31 @@ func s:ContinueLinkCommand()
   endif
 endfunc
 
-func s:MapCommand(arg)
+func s:MountCommand(arg)
   let arg = join(a:arg)
   let cmd = printf('-stack-list-frames --thread %d', s:selected_thread)
-  call s:SendMICommand(cmd, function('s:HandleFrameMap', [arg]))
+  call s:SendMICommand(cmd, function('s:HandleFrameMount', [arg]))
+endfunc
+
+func s:MapCommand(arg)
+  let arg = join(a:arg)
+
+  let pid = PromptDebugGetPid()
+  if pid <= 0
+    call s:ShowError('No pid!')
+    return
+  endif
+  let cmd = printf("cat /proc/%d/maps", PromptDebugGetPid())
+  if exists('s:host')
+    let cmd = ["ssh", s:host, cmd]
+  endif
+  let lines = systemlist(cmd)
+  call filter(lines, 'stridx(v:val, arg) >= 0')
+  if !v:shell_error
+    for line in lines
+      call s:ShowNormal(line)
+    endfor
+  endif
 endfunc
 
 func s:FinishCommand()
@@ -2584,7 +2607,7 @@ func s:HandleLinkRegisterWatch(dict)
   call s:SendMICommandNoOutput('-exec-continue')
 endfunc
 
-func s:HandleFrameMap(dir, dict)
+func s:HandleFrameMount(dir, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
   let files_bunch = s:LocateFrameFiles(frames, a:dir)
   let failed_basenames = #{}
@@ -2621,7 +2644,7 @@ func s:HandleFrameMap(dir, dict)
   endfor
   let total_failed = len(failed_basenames)
   if total_failed > 0
-    call s:ShowWarning("Failed to insert " .. total_failed .. " mappings!")
+    call s:ShowWarning("Failed to make " .. total_failed .. " mounts!")
   endif
   for rule in rules
     let [from, to] = rule
@@ -2630,10 +2653,10 @@ func s:HandleFrameMap(dir, dict)
     call s:SendMICommandNoOutput(cmd)
   endfor
   if len(rules) > 0
-    call s:ShowNormal("Total " .. len(rules) .. " mappings made.")
+    call s:ShowNormal("Total " .. len(rules) .. " mounts made.")
     call s:WhereCommand()
   else
-    call s:ShowNormal("No mappings possible.")
+    call s:ShowNormal("No mounts possible.")
   endif
 endfunc
 
