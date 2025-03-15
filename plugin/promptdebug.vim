@@ -92,6 +92,41 @@ func PromptDebugGoToBreakpoint(id)
   call cursor(lnum, 0)
 endfunc
 
+func PromptDebugPlaceBreakpoint(args)
+  if bufnr() == s:asm_bufnr
+    let addr = matchstr(getline('.'), '^0x\x\+')
+    if !empty(addr)
+      let loc = "*" .. addr
+    else
+      return s:ShowError("Cannot a breakpoint here.")
+    endif
+  else
+    let basename = expand("%:t")
+    let lnum = line(".")
+    let loc = printf("%s:%d", basename, lnum)
+  endif
+  let cmd = '-break-insert '
+  if has_key(a:args, 'temp')
+    let cmd ..= '-t '
+  endif
+  if has_key(a:args, 'pending')
+    let cmd ..= '-f '
+  endif
+  if has_key(a:args, 'this_thread')
+    let cmd ..= '-p ' .. s:selected_thread
+  endif
+  if has_key(a:args, 'disabled')
+    let cmd ..= '-d '
+  endif
+  let cmd ..= s:EscapeMIArgument(loc)
+  if has_key(a:args, 'until')
+    call s:SendMIChained([cmd, '-exec-continue'])
+  else
+    let Cb = function('s:HandleNewBreakpoint', [[]])
+    call s:SendMICommand(cmd, Cb)
+  endif
+endfunc
+
 func PromptDebugGoToCapture()
   let ids = win_findbuf(s:capture_bufnr)
   if empty(ids)
@@ -163,12 +198,6 @@ func PromptDebugShowPwd()
   call s:SendMICommand('-environment-pwd', function('s:HandlePwd'))
 endfunc
 
-func PromptDebugSendCommands(...)
-  for cmd in a:000
-    call PromptDebugSendCommand(cmd)
-  endfor
-endfunc
-
 func PromptDebugSendCommand(cmd)
   call s:StopFloatingOutput()
   if PromptDebugIsStopped()
@@ -231,10 +260,24 @@ func s:SendMICommand(cmd, Callback)
   call chansend(s:gdb_job_id, cmd . "\n")
 endfunc
 
+func s:SendMIChained(cmds, Callback)
+  if len(cmds) == 1
+    let Cb = a:Callback
+  else
+    let Cb = {-> s:SendMIChained(cmds[1:], a:Callback)}
+  endif
+  call s:SendMICommand(a:cmds[0], a:Callback)
+endfunc
+
 function s:SendMICommandNoOutput(cmd)
   let IgnoreOutput = {_ -> {}}
   return s:SendMICommand(a:cmd, IgnoreOutput)
 endfunction
+
+func s:SendMIChainedNoOutput(cmds)
+  let IgnoreOutput = {_ -> {}}
+  return s:SendMIChained(a:cmds, IgnoreOutput)
+endfunc
 
 " Accepts either a console command or a C++ expression
 func s:EscapeMIArgument(arg)
