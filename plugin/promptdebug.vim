@@ -261,12 +261,12 @@ func s:SendMICommand(cmd, Callback)
 endfunc
 
 func s:SendMIChained(cmds, Callback)
-  if len(cmds) == 1
+  if len(a:cmds) == 1
     let Cb = a:Callback
   else
-    let Cb = {-> s:SendMIChained(cmds[1:], a:Callback)}
+    let Cb = {-> s:SendMIChained(a:cmds[1:], a:Callback)}
   endif
-  call s:SendMICommand(a:cmds[0], a:Callback)
+  call s:SendMICommand(a:cmds[0], Cb)
 endfunc
 
 function s:SendMICommandNoOutput(cmd)
@@ -989,7 +989,7 @@ func s:PromptOutput(cmd)
   endif
 
   if g:promptdebug_reverse_eng
-    if cmd[0]->s:IsCommand("continue_link", 10) || cmd[0] == "cl"
+    if cmd[0] == "bl" || cmd[0] == "cl"
       return s:ContinueLinkCommand()
     elseif cmd[0]->s:IsCommand("mount", 3)
       return s:MountCommand(cmd[1:])
@@ -1061,11 +1061,20 @@ endfunc
 
 func s:ContinueLinkCommand()
   if !exists('s:lr_wpt_number')
-    call s:SendMICommand('-data-evaluate-expression $lr', function('s:HandleLinkRegisterValue'))
+    call s:ShowNormal("A special watchpoint is going to be inserted to service the request.")
+    call s:SendMICommand('-break-watch $x30', function('s:HandleLinkRegisterWatch'))
   else
-    let Cb = {_ -> s:SendMICommandNoOutput('-exec-continue')}
-    call s:SendMICommand('-break-enable ' .. s:lr_wpt_number, Cb)
+    call s:ContinueToLinkRegister()
   endif
+endfunc
+
+func s:ContinueToLinkRegister()
+  let cmds = []
+  call add(cmds, '-break-enable ' .. s:lr_wpt_number)
+  call add(cmds, '-gdb-set scheduler-locking on')
+  call add(cmds, '-exec-continue')
+  call add(cmds, '-gdb-set scheduler-locking ' .. s:scheduler_locking)
+  call s:SendMIChainedNoOutput(cmds)
 endfunc
 
 func s:MountCommand(arg)
@@ -1096,10 +1105,11 @@ func s:MapCommand(arg)
 endfunc
 
 func s:FinishCommand()
-  let was_option = s:scheduler_locking
-  call s:SendMICommandNoOutput('-gdb-set scheduler-locking on')
-  call s:SendMICommandNoOutput('-exec-finish')
-  call s:SendMICommandNoOutput('-gdb-set scheduler-locking ' . was_option)
+  let cmds = []
+  call add(cmds, '-gdb-set scheduler-locking on')
+  call add(cmds, '-exec-finish')
+  call add(cmds, '-gdb-set scheduler-locking ' .. s:scheduler_locking)
+  call s:SendMIChainedNoOutput(cmds)
 endfunc
 
 func s:UpCommand()
@@ -1937,8 +1947,11 @@ func s:HandleNewBreakpoint(def_cmds, dict)
       let msg = printf('Catchpoint %s (%s)', bkpt['number'], bkpt['what'])
       call s:ShowNormal(msg)
     elseif stridx(bkpt['type'], 'watchpoint') >= 0
-      let msg = printf('Watchpoint %s (%s)', bkpt['number'], bkpt['what'])
-      call s:ShowNormal(msg)
+      " Add an exception to not show this message every time we execute "bl" command
+      if bkpt['number'] != get(s:, 'lr_wpt_number', -1)
+        let msg = printf('Watchpoint %s (%s)', bkpt['number'], bkpt['what'])
+        call s:ShowNormal(msg)
+      endif
     endif
     return
   endif
@@ -1998,6 +2011,11 @@ endfunc
 func s:HandleBreakpointDelete(dict)
   let id = a:dict['id']
   call s:ClearBreakpointSign(id, 1)
+  " We internally create this watchpoint to service "bl" command. Update
+  " state to reflect that the watchpoint must be created anew.
+  if id == get(s:, 'lr_wpt_number', -1)
+    unlet s:lr_wpt_number
+  endif
 endfunc
 
 func s:ClearBreakpointSign(id, delete)
@@ -2633,20 +2651,9 @@ func s:HandleFrameJump(level, dict)
   call s:SendMICommandNoOutput('-stack-select-frame ' .. s:selected_frame)
 endfunc
 
-func s:HandleLinkRegisterValue(dict)
-  let value = str2nr(a:dict['value'])
-  if value != 0
-    call s:ShowNormal("A special watchpoint is going to be inserted to service the request.")
-    call s:SendMICommand('-break-watch $lr', function('s:HandleLinkRegisterWatch'))
-  else
-    call s:ShowError("Not supported on target")
-  endif
-endfunc
-
 func s:HandleLinkRegisterWatch(dict)
   let s:lr_wpt_number = a:dict['wpt']['number']
-  " Finally, complete the request by advancing to the next bl instruction.
-  call s:SendMICommandNoOutput('-exec-continue')
+  call s:ContinueToLinkRegister()
 endfunc
 
 func s:HandleFrameMount(dir, dict)
