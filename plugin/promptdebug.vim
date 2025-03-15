@@ -994,7 +994,11 @@ func s:PromptOutput(cmd)
     elseif cmd[0]->s:IsCommand("mount", 3)
       return s:MountCommand(cmd[1:])
     elseif cmd[0]->s:IsCommand("maps", 3)
-      return s:MapCommand(cmd[1:])
+      if cmd[1] == "find"
+        return s:MapFindCommand(cmd[2:])
+      else
+        return s:MapsCommand(cmd[1:])
+      endif
     endif
   endif
 
@@ -1083,25 +1087,33 @@ func s:MountCommand(arg)
   call s:SendMICommand(cmd, function('s:HandleFrameMount', [arg]))
 endfunc
 
-func s:MapCommand(arg)
-  let pat = join(a:arg)
-
+func s:GetMaps()
   let pid = PromptDebugGetPid()
   if pid <= 0
     call s:ShowError('No pid!')
-    return
+    return []
   endif
   let cmd = printf("cat /proc/%d/maps", pid)
   if exists('s:host')
     let cmd = ["ssh", s:host, cmd]
   endif
   let lines = systemlist(cmd)
-  if !v:shell_error
-    call filter(lines, 'stridx(v:val, pat) >= 0')
-    for line in lines
-      call s:ShowNormal(line)
-    endfor
-  endif
+  return v:shell_error ? [] : lines
+endfunc
+
+func s:MapsCommand(arg)
+  let pat = join(a:arg)
+  let lines = s:GetMaps()
+  call filter(lines, 'stridx(v:val, pat) >= 0')
+  for line in lines
+    call s:ShowNormal(line)
+  endfor
+endfunc
+
+func s:MapFindCommand(expr)
+  let expr = join(a:expr)
+  let Cb = function('s:HandleMapFindVar')
+  call s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(a:expr), Cb)
 endfunc
 
 func s:FinishCommand()
@@ -1407,6 +1419,37 @@ func s:ShowFormatVar(format, display_name, dict)
     let cmd = printf('-var-set-format %s %s', a:dict['name'], a:format)
     call s:SendMICommand(cmd, Cb)
   endif
+endfunc
+
+func s:HandleMapFindVar(dict)
+  let gdb_handle = a:dict['name']
+  let cmd = printf('-var-set-format %s hexadecimal', gdb_handle)
+  call s:SendMICommand(cmd, function('s:MapFindVar', [gdb_handle]) )
+endfunc
+
+func s:MapFindVar(name, dict)
+  let value = str2nr(a:dict['value'], 16)
+  call s:SendMICommandNoOutput('-var-delete ' . a:name)
+  if value <= 0
+    return s:ShowError("Invalid value: " .. a:dict['value'])
+  endif
+  let lines = s:GetMaps()
+  for line in lines
+    let m = matchlist(line, '^\(\x\+\)-\(\x\+\)\s\S\+\s\(\x\+\)')
+    if !empty(m)
+      let from = str2nr(m[1], 16)
+      let to = str2nr(m[2], 16)
+      let map_offset = str2nr(m[3], 16)
+      if from <= value && value < to
+        call s:ShowMessage([[line, 'debugValue']])
+        let len = to - from
+        call s:ShowNormal(printf("Size of map: %x", len))
+        call s:ShowNormal(printf('Sections: %x-%x', map_offset, map_offset + len))
+        let virt_offset = value - from
+        call s:ShowNormal(printf('At file offset: 0x%x', map_offset + virt_offset))
+      endif
+    endif
+  endfor
 endfunc
 
 func s:ShowEvaluation(lnum, nesting, display_name, dict)
