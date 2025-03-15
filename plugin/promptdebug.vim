@@ -1902,9 +1902,15 @@ func s:PlaceAsmCursor(dict)
   let line = get(a:dict, 'line', '')
   if !s:SelectAsmAddr(addr, line)
     " Reload disassembly
-    let cmd = printf("-data-disassemble -a %s 0", addr)
-    let Cb = function('s:HandleDisassemble', [addr, line])
-    call s:SendMICommand(cmd, Cb)
+    if a:dict['func'] != '??'
+      let cmd = printf("-data-disassemble -a %s 0", addr)
+      let Cb = function('s:HandleDisassemble', [addr, line])
+      call s:SendMICommand(cmd, Cb)
+    elseif g:promptdebug_reverse_eng
+      let cmd = printf("-data-disassemble -s 0x%x -e 0x%x 0", addr, addr + 400)
+      let Cb = function('s:HandleDisassemble', [addr, line])
+      call s:SendMICommand(cmd, Cb)
+    endif
   endif
 endfunc
 
@@ -2635,14 +2641,22 @@ func s:HandleDisassemble(addr, line, dict)
     return
   endif
 
-  let intro = printf("Disassembly of %s:", asm_insns[0]['func-name'])
+  if has_key(asm_insns[0], 'func-name')
+    let intro = printf("Disassembly of %s:", asm_insns[0]['func-name'])
+  else
+    let intro = printf("Linear disassembly:")
+  endif
   call appendbufline(s:asm_bufnr, 0, intro)
 
   for asm_ins in asm_insns
     let address = asm_ins['address']
-    let offset = asm_ins['offset']
     let inst = asm_ins['inst']
-    let line = printf("%s<%d>: %s", address, offset, inst)
+    if has_key(asm_ins, 'offset')
+      let offset = asm_ins['offset']
+      let line = printf("%s<%d>: %s", address, offset, inst)
+    else
+      let line = printf("%s: %s", address, inst)
+    endif
     call appendbufline(s:asm_bufnr, "$", line)
   endfor
   call s:SelectAsmAddr(a:addr, a:line)
