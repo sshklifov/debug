@@ -122,7 +122,7 @@ func PromptDebugPlaceBreakpoint(args)
   if has_key(a:args, 'until')
     call s:SendMIChainedNoOutput([cmd, '-exec-continue'])
   else
-    let Cb = function('s:HandleNewBreakpoint', [[]])
+    let Cb = function('s:HandleNewBreakpoint')
     call s:SendMICommand(cmd, Cb)
   endif
 endfunc
@@ -1059,7 +1059,7 @@ func s:RestoreBreakpoints(where)
   let locs = br_state[0]
   let cmds = br_state[1]
   for idx in range(len(locs))
-    let Cb = function('s:HandleNewBreakpoint', [cmds[idx]])
+    let Cb = function('s:HandleRestoredBreakpoint', [cmds[idx]])
     call s:SendMICommand("-break-insert " .. s:EscapeMIArgument(locs[idx]), Cb)
   endfor
   call s:ShowNormal("Inserted " .. len(locs) .. " breakpoint(s).")
@@ -1711,7 +1711,7 @@ func s:HandleAsync(msg)
   elseif async == 'thread-created' || async == 'thread-exited'
     return s:HandleThreadChanged(async, dict)
   elseif async == 'breakpoint-created' || async == 'breakpoint-modified'
-    return s:HandleNewBreakpoint([], dict)
+    return s:HandleNewBreakpoint(dict)
   elseif async == 'breakpoint-deleted'
     return s:HandleBreakpointDelete(dict)
   elseif async == 'cmd-param-changed'
@@ -2019,8 +2019,7 @@ endfunc
 
 " Handle setting a breakpoint
 " Will update the sign that shows the breakpoint
-" TODO i want to remove def_cmds, although it works fine
-func s:HandleNewBreakpoint(def_cmds, dict)
+func s:HandleNewBreakpoint(dict)
   let bkpt = a:dict['bkpt']
   if bkpt['type'] != 'breakpoint'
     " Display a message to the user
@@ -2060,11 +2059,22 @@ func s:HandleNewBreakpoint(def_cmds, dict)
   endif
 endfunc
 
-func s:AddBreakpoint(def_cmds, bkpt, parent)
+func s:HandleRestoredBreakpoint(cmds, dict)
+  call s:HandleNewBreakpoint(a:dict)
+  let bkpt = a:dict['bkpt']
+  let id = bkpt['number']
+  if has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
+    call s:ShowWarning(printf('Breakpoint %s has multiple locations, ignoring commands', id))
+  else
+    call assert_true(has_key(s:breakpoints, id))
+    let s:breakpoints[id]['script'] = a:cmds
+  endif
+endfunc
+
+func s:AddBreakpoint(bkpt, parent)
   let id = a:bkpt['number']
   let new = v:false
   if !has_key(s:breakpoints, id)
-    let s:breakpoints[id] = #{script: a:def_cmds}
     let new = v:true
   endif
   let item = s:breakpoints[id]
