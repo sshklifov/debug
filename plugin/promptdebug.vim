@@ -106,13 +106,13 @@ func PromptDebugPlaceBreakpoint(args)
     let loc = printf("%s:%d", basename, lnum)
   endif
   let cmd = '-break-insert '
-  if has_key(a:args, 'temp')
+  if has_key(a:args, 'temp') || has_key(a:args, 'until')
     let cmd ..= '-t '
   endif
   if has_key(a:args, 'pending')
     let cmd ..= '-f '
   endif
-  if has_key(a:args, 'this_thread')
+  if has_key(a:args, 'thread')
     let cmd ..= '-p ' .. s:selected_thread
   endif
   if has_key(a:args, 'disabled')
@@ -120,7 +120,7 @@ func PromptDebugPlaceBreakpoint(args)
   endif
   let cmd ..= s:EscapeMIArgument(loc)
   if has_key(a:args, 'until')
-    call s:SendMIChained([cmd, '-exec-continue'])
+    call s:SendMIChainedNoOutput([cmd, '-exec-continue'])
   else
     let Cb = function('s:HandleNewBreakpoint', [[]])
     call s:SendMICommand(cmd, Cb)
@@ -999,6 +999,8 @@ func s:PromptOutput(cmd)
       else
         return s:MapsCommand(cmd[1:])
       endif
+    elseif cmd[0] == 'lsof'
+      return s:FileDescriptorsCommand()
     endif
   endif
 
@@ -1107,6 +1109,38 @@ func s:MapsCommand(arg)
   call filter(lines, 'stridx(v:val, pat) >= 0')
   for line in lines
     call s:ShowNormal(line)
+  endfor
+endfunc
+
+func s:FileDescriptorsCommand()
+  let pid = PromptDebugGetPid()
+  if pid <= 0
+    call s:ShowError('No pid!')
+    return []
+  endif
+  let cmd = printf('ls /proc/%d/fd', pid)
+  if exists('s:host')
+    let cmd = ["ssh", s:host, cmd]
+  endif
+  if v:shell_error
+    return s:ShowError("Command failed!")
+  endif
+  let fds = systemlist(cmd)
+  call sort(fds, 'N')
+
+  let cmd = 'readlink -f'
+  for fd in fds
+    let cmd ..= printf(' /proc/%d/fd/%s', pid, fd)
+  endfor
+  if exists('s:host')
+    let cmd = ["ssh", s:host, cmd]
+  endif
+  let followed = systemlist(cmd)
+  if v:shell_error
+    return s:ShowError("Command failed!")
+  endif
+  for i in range(len(fds))
+    call s:ShowNormal(printf('%s: %s', fds[i], followed[i]))
   endfor
 endfunc
 
@@ -1907,7 +1941,7 @@ func s:PlaceAsmCursor(dict)
       let Cb = function('s:HandleDisassemble', [addr, line])
       call s:SendMICommand(cmd, Cb)
     elseif g:promptdebug_reverse_eng
-      let cmd = printf("-data-disassemble -s 0x%x -e 0x%x 0", addr, addr + 400)
+      let cmd = printf("-data-disassemble -s 0x%x -e 0x%x 0", addr - 100, addr + 300)
       let Cb = function('s:HandleDisassemble', [addr, line])
       call s:SendMICommand(cmd, Cb)
     endif
