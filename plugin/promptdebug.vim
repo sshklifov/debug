@@ -60,6 +60,7 @@ hi default link debugExpandable markdownLinkText
 hi default link debugIdentifier Italic
 hi default link debugLocation Normal
 hi default link debugValue markdownCode
+hi default link debugMarkedInst Error
 "}}}
 
 """"""""""""""""""""""""""""""""Go to"""""""""""""""""""""""""""""""""""""""""{{{
@@ -125,6 +126,29 @@ func PromptDebugPlaceBreakpoint(args)
     let Cb = function('s:HandleNewBreakpoint')
     call s:SendMICommand(cmd, Cb)
   endif
+endfunc
+
+func PromptDebugMarkInstruction(inst_pat)
+  if !s:asm_mode
+    return s:ShowError('Not in assembly mode!')
+  endif
+  let s:hl_inst = a:inst_pat
+  let reg_ns = nvim_create_namespace('PromptDebugRegister')
+  for idx in range(nvim_buf_line_count(s:asm_bufnr))
+    let line = getbufoneline(s:asm_bufnr, idx + 1)
+    let col_idx = stridx(line, ':')
+    call assert_true(col_idx > 0)
+    let inst = line[col_idx+1:]
+    if match(inst, s:hl_inst) >= 0
+      let opts = #{end_col: col_idx + 1, hl_group: "debugMarkedInst"}
+      call nvim_buf_set_extmark(s:asm_bufnr, reg_ns, idx, 0, opts)
+    endif
+  endfor
+endfunc
+
+func PromptDebugClearMarks()
+  let reg_ns = nvim_create_namespace('PromptDebugRegister')
+  call nvim_buf_clear_namespace(s:asm_bufnr, reg_ns, 0, -1)
 endfunc
 
 func PromptDebugGoToCapture()
@@ -359,6 +383,7 @@ func PromptDebugStart(...)
   let s:multi_brs = #{}
   let s:callbacks = #{}
   let s:files_warned = #{}
+  let s:hl_inst = ''
   let s:floating_output = 0
   let s:source_bufnr = -1
   let s:stopped = 1
@@ -2044,14 +2069,14 @@ func s:HandleNewBreakpoint(dict)
   call s:ClearBreakpointSign(bkpt['number'], 0)
   if has_key(bkpt, 'addr') && bkpt['addr'] == '<MULTIPLE>'
     for location in bkpt['locations']
-      let [id, new] = s:AddBreakpoint(a:def_cmds, location, bkpt)
+      let [id, new] = s:AddBreakpoint(location, bkpt)
       call s:PlaceBreakpointSign(id)
       if new && exists('s:pid')
         call s:FormatBreakpointMessage(location, bkpt)
       endif
     endfor
   else
-    let [id, new] = s:AddBreakpoint(a:def_cmds, bkpt, #{})
+    let [id, new] = s:AddBreakpoint(bkpt, #{})
     call s:PlaceBreakpointSign(id)
     if new && exists('s:pid')
       call s:FormatBreakpointMessage(bkpt, #{})
@@ -2076,6 +2101,7 @@ func s:AddBreakpoint(bkpt, parent)
   let new = v:false
   if !has_key(s:breakpoints, id)
     let new = v:true
+    let s:breakpoints[id] = #{script: []}
   endif
   let item = s:breakpoints[id]
   let item['enabled'] = a:bkpt['enabled'] == 'y'
@@ -2678,6 +2704,8 @@ func s:HandleDisassemble(addr, line, dict)
   let asm_insns = a:dict['asm_insns']
 
   call deletebufline(s:asm_bufnr, 1, '$')
+  let reg_ns = nvim_create_namespace('PromptDebugRegister')
+  call nvim_buf_clear_namespace(s:asm_bufnr, reg_ns, 0, -1)
   if empty(asm_insns)
     call appendbufline(s:asm_bufnr, 0, "No disassembler output")
     return
@@ -2696,10 +2724,17 @@ func s:HandleDisassemble(addr, line, dict)
     if has_key(asm_ins, 'offset')
       let offset = asm_ins['offset']
       let line = printf("%s<%d>: %s", address, offset, inst)
+      let endcol = len(address) + len(offset) + 3
     else
       let line = printf("%s: %s", address, inst)
+      let endcol = len(address) + 1
     endif
     call appendbufline(s:asm_bufnr, "$", line)
+    if !empty(s:hl_inst) && match(inst, s:hl_inst) >= 0
+      let lines = nvim_buf_line_count(s:asm_bufnr)
+      let opts = #{end_col: endcol, hl_group: "debugMarkedInst"}
+      call nvim_buf_set_extmark(s:asm_bufnr, reg_ns, lines - 1, 0, opts)
+    endif
   endfor
   call s:SelectAsmAddr(a:addr, a:line)
 endfunc
