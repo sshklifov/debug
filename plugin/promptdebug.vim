@@ -1476,11 +1476,6 @@ func s:MapFindVar(name, dict)
       let map_offset = str2nr(m[3], 16)
       if from <= value && value < to
         call s:ShowMessage([[line, 'debugValue']])
-        let len = to - from
-        call s:ShowNormal(printf("Size of map: %x", len))
-        call s:ShowNormal(printf('Sections: %x-%x', map_offset, map_offset + len))
-        let virt_offset = value - from
-        call s:ShowNormal(printf('At file offset: 0x%x', map_offset + virt_offset))
       endif
     endif
   endfor
@@ -1931,6 +1926,8 @@ func s:PlaceSourceCursor(dict)
   endif
 endfunc
 
+" TODO integrate find!
+
 func s:PlaceAsmCursor(dict)
   let addr = get(a:dict, 'addr', '')
   let line = get(a:dict, 'line', '')
@@ -2022,6 +2019,7 @@ endfunc
 
 " Handle setting a breakpoint
 " Will update the sign that shows the breakpoint
+" TODO i want to remove def_cmds, although it works fine
 func s:HandleNewBreakpoint(def_cmds, dict)
   let bkpt = a:dict['bkpt']
   if bkpt['type'] != 'breakpoint'
