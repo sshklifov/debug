@@ -243,6 +243,10 @@ func PromptDebugGetState()
   return s:
 endfunc
 
+func PromptDebugEnableTimings()
+  call s:SendMICommandNoOutput('-enable-timings')
+endfunc
+
 func PromptDebugPrettyPrinter(regs, func)
   if type(a:regs) == v:t_list
     call add(s:pretty_printers, [a:func] + a:regs)
@@ -271,7 +275,7 @@ endfunc
 func s:SendMICommand(cmd, Callback)
   let token = s:token_counter
   let s:token_counter += 1
-  let s:callbacks[token] = a:Callback
+  let s:callbacks[token] = [a:cmd, a:Callback, reltime()]
   let cmd = printf("%d%s", token, a:cmd)
   " Log command to capture buffer
   if s:EmptyBuffer(s:capture_bufnr)
@@ -567,6 +571,10 @@ func s:CommReset(timer_id)
 endfunc
 
 func s:CommJoin(job_id, msgs, event)
+  " Only not exact when EvalFailedException is thrown, which is
+  " 1) Rare.
+  " 2) Outside the control of this plugin.
+  let then = reltime()
   for msg in a:msgs
     " Append to capture buf
     if !empty(msg) && msg != '(gdb) '
@@ -579,7 +587,7 @@ func s:CommJoin(job_id, msgs, event)
     " Process message
     let msg = s:comm_buf .. msg
     try
-      call s:CommOutput(msg)
+      call s:CommOutput(then, msg)
       let s:comm_buf = ""
       if exists('s:comm_timer')
         call timer_stop(s:comm_timer)
@@ -1709,7 +1717,7 @@ endfunc
 "}}}
 
 """"""""""""""""""""""""""""""""Record handlers"""""""""""""""""""""""""""""""{{{
-func s:CommOutput(msg)
+func s:CommOutput(start_time, msg)
   " Stream record
   if !empty(a:msg) && stridx("~@&", a:msg[0]) == 0
     return s:HandleStream(a:msg)
@@ -1717,12 +1725,13 @@ func s:CommOutput(msg)
   " Async record
   let async = s:GetAsyncClass(a:msg)
   if !empty(async)
+    " XXX: Not sure how to integrate timings with async methods...
     return s:HandleAsync(a:msg)
   endif
   " Result record
   let result = s:GetResultClass(a:msg)
   if !empty(result)
-    return s:HandleResult(a:msg)
+    return s:HandleResult(a:start_time, a:msg)
   endif
 endfunc
 
@@ -1748,13 +1757,25 @@ func s:HandleAsync(msg)
   endif
 endfunc
 
-func s:HandleResult(msg)
+func s:HandleResult(start_time, msg)
   let result = s:GetResultClass(a:msg)
   let token = s:GetResultToken(a:msg)
   let dict = EvalCommaResults(a:msg)
   if result == 'done'
     if str2nr(token) > 0 && has_key(s:callbacks, token)
-      let Callback = s:callbacks[token]
+      let cmd = s:callbacks[token][0]
+      if has_key(dict, 'time')
+        " Who though up of this syntax?
+        let secs_total = reltimefloat(reltime(s:callbacks[token][2], reltime()))
+        let secs_us = reltimefloat(reltime(a:start_time, reltime()))
+        let percent_us = float2nr(100.0 * secs_us / secs_total)
+        if secs_us > 0.1 && percent_us > 30
+          call s:ShowWarning(printf('Command "%s" took %fs (%d%% by us).', cmd, secs_total, percent_us))
+          let secs_gdb = str2float(dict['time']['wallclock'])
+          call s:ShowWarning(printf('Gdb timing = %fsecs', secs_gdb))
+        endif
+      endif
+      let Callback = s:callbacks[token][1]
       return Callback(dict)
     else
       echom "Unhandled record!"
