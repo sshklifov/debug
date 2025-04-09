@@ -1772,7 +1772,7 @@ func s:HandleResult(start_time, msg)
         if secs_us > 0.1 && percent_us > 30
           call s:ShowWarning(printf('Command "%s" took %fs (%d%% by us).', cmd, secs_total, percent_us))
           let secs_gdb = str2float(dict['time']['wallclock'])
-          call s:ShowWarning(printf('Gdb timing = %fsecs', secs_gdb))
+          call s:ShowWarning(printf('Time spend internally in Gdb: %fs', secs_gdb))
         endif
       endif
       let Callback = s:callbacks[token][1]
