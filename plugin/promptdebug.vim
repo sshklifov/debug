@@ -975,6 +975,8 @@ func s:PromptOutput(cmd)
     if cmd[0] == "p" || cmd[0][:1] == 'p/' ||
           \ cmd[0] == "print" || cmd[0][:5] == 'print/'
       return s:PrintCommand(cmd[0], join(cmd[1:], " "))
+    elseif cmd[0][:2] == "pv"
+      return s:PrintVectorCommand(join(cmd[1:], " "))
     endif
   endif
   if g:promptdebug_override_f_and_bt
@@ -1435,6 +1437,31 @@ func s:PrintCommand(cmd, expr)
 
   let Cb = function('s:ShowFormatVar', [format, a:expr])
   call s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(a:expr), Cb)
+endfunc
+
+func s:PrintVectorCommand(expr)
+  let Cb = function('s:HandleVectorSize', [a:expr])
+  let length_expr = printf('%s._M_impl._M_finish-%s._M_impl._M_start', a:expr, a:expr)
+  call s:SendMICommand('-data-evaluate-expression ' . s:EscapeMIArgument(length_expr), Cb)
+endfunc
+
+func s:HandleVectorSize(expr, dict)
+  let len_str = a:dict['value']
+  let len = str2nr(len_str)
+  if len_str != len
+    return s:ShowWarning("Invalid length: " .. len)
+  endif
+  if len == 0
+    return s:ShowNormal("Empty vector")
+  endif
+
+  let capped_len = min([len, 20])
+  for i in range(capped_len)
+    let display_name = printf("%s[%d]", a:expr, i)
+    let expr = printf("%s._M_impl._M_start[%d]", a:expr, i)
+    let Cb = function('s:ShowFormatVar', ['natural', display_name])
+    call s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(expr), Cb)
+  endfor
 endfunc
 
 func s:FindPrettyPrinter(dict)
