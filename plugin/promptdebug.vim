@@ -46,10 +46,6 @@ call s:DefineOption('g:promptdebug_thread_filter', 1)
 " Enable binary reverse engineering features.
 call s:DefineOption('g:promptdebug_reverse_eng', 1)
 
-" Silently execute unsupported commands. Alternative is to show them in a floating window.
-" Enabled by default because it is slightly buggy/annoying.
-call s:DefineOption('g:promptdebug_silent_mode', 1)
-
 " Highlights for sign column
 hi default link debugPrompt Bold
 hi default link debugPC CursorLine
@@ -223,7 +219,6 @@ func PromptDebugShowPwd()
 endfunc
 
 func PromptDebugSendCommand(cmd)
-  call s:StopFloatingOutput()
   if PromptDebugIsStopped()
     call s:PromptOutput(a:cmd)
   else
@@ -307,6 +302,24 @@ func s:SendMIChainedNoOutput(cmds)
   return s:SendMIChained(a:cmds, IgnoreOutput)
 endfunc
 
+func s:SendConsoleCommand(cmd, Cb)
+  let s:console_command_output = ""
+  let msg = '-interpreter-exec console ' .. s:EscapeMIArgument(a:cmd)
+  call s:SendMICommand(msg, function('s:ConsoleCommandWrapper', [a:Cb]))
+endfunc
+
+func s:ConsoleCommandWrapper(Cb, _)
+  call assert_true(exists('s:console_command_output'))
+  let output = split(s:console_command_output, "\n")
+  unlet s:console_command_output
+  call a:Cb(output)
+endfunc
+
+func s:SendConsoleCommandNoOutput(cmd)
+  let msg = '-interpreter-exec console ' .. s:EscapeMIArgument(a:cmd)
+  call s:SendMICommandNoOutput(msg)
+endfunc
+
 " Accepts either a console command or a C++ expression
 func s:EscapeMIArgument(arg)
   let escaped = '"'
@@ -388,7 +401,6 @@ func PromptDebugStart(...)
   let s:callbacks = #{}
   let s:files_warned = #{}
   let s:hl_inst = ''
-  let s:floating_output = 0
   let s:source_bufnr = -1
   let s:stopped = 1
   let s:asm_mode = 0
@@ -817,17 +829,12 @@ function! s:CmdlineCompl(ArgLead, CmdLine, CursorPos)
   return []
 endfunction
 
-func s:InterpreterExec(cmd)
-  let msg = '-interpreter-exec console ' .. s:EscapeMIArgument(a:cmd)
-  call s:SendMICommandNoOutput(msg)
-endfunc
-
 func s:StartLocally(str_args)
   if PromptDebugStart()
     let cmd_args = split(a:str_args, '\s')
     if len(cmd_args) >= 1
-      call s:InterpreterExec("file " .. cmd_args[0])
-      call s:InterpreterExec("start " .. join(cmd_args[1:]))
+      call s:SendConsoleCommandNoOutput("file " .. cmd_args[0])
+      call s:SendConsoleCommandNoOutput("start " .. join(cmd_args[1:]))
     endif
   endif
 endfunc
@@ -843,13 +850,13 @@ func s:RunLocally(str_args)
   if len(cmd_args) <= 0
     return
   endif
-  call s:InterpreterExec("file " .. cmd_args[0])
+  call s:SendConsoleCommandNoOutput("file " .. cmd_args[0])
   " Add a breakpoint with the current cursor position
   if !empty(filename)
     let br = printf("tbr %s:%d", filename, lnum)
-    call s:InterpreterExec(br)
+    call s:SendConsoleCommandNoOutput(br)
   endif
-  call s:InterpreterExec("run " .. join(cmd_args[1:]))
+  call s:SendConsoleCommandNoOutput("run " .. join(cmd_args[1:]))
 endfunc
 
 function! s:AttachCompl(ArgLead, CmdLine, CursorPos)
@@ -888,7 +895,7 @@ func s:AttachLocally(proc)
     let pid = pids[0]
   endif
   call PromptDebugStart()
-  call s:InterpreterExec("attach " .. pid)
+  call s:SendConsoleCommandNoOutput("attach " .. pid)
 endfunc
 
 if g:promptdebug_commands
@@ -1039,20 +1046,8 @@ func s:PromptOutput(cmd)
     endif
   endif
 
-  " Good 'ol GDB commands
-  let cmd_console = '-interpreter-exec console ' . s:EscapeMIArgument(a:cmd)
-  if g:promptdebug_silent_mode
-    " Run silently and report errors only.
-    return s:SendMICommandNoOutput(cmd_console)
-  else
-    " Run command and redirect output to floating window
-    let s:floating_output = 1
-    return s:SendMICommand(cmd_console, function('s:StopFloatingOutput'))
-  endif
-endfunc
-
-func s:StopFloatingOutput(...)
-  let s:floating_output = 0
+  " Good 'ol GDB commands. Run silently and report errors only.
+  return s:SendConsoleCommandNoOutput(a:cmd)
 endfunc
 
 func s:CommandsCommand(brs)
@@ -1288,7 +1283,7 @@ func s:InfoVarsCommand()
 endfunc
 
 func s:ShowCommand(what)
-  call s:SendMICommand('-gdb-show ' .. a:what, function('s:HandleShow', [0]))
+  call s:SendConsoleCommand('show ' .. a:what, function('s:HandleConsoleShow'))
 endfunc
 
 func s:SetCommand(what)
@@ -1813,26 +1808,9 @@ func s:HandleResult(start_time, msg)
 endfunc
 
 func s:HandleStream(msg)
-  execute printf('let msg = %s', a:msg[1:])
-  let lines = split(msg, "\n", 1)
-  if s:floating_output
-    " Lazily open the window
-    if !exists('s:edit_win')
-      call s:OpenFloatEdit(20, 1, [])
-      augroup PromptDebugFloatEdit
-        autocmd! WinClosed * call s:StopFloatingOutput()
-        autocmd! WinClosed * call s:CloseFloatEdit()
-      augroup END
-    endif
-    " Append message
-    let bufnr = winbufnr(s:edit_win)
-    let last_line = getbufoneline(bufnr, '$') .. lines[0]
-    call setbufline(bufnr, '$', last_line)
-    call appendbufline(bufnr, '$', lines[1:])
-    " Resize float window
-    let widths = map(getbufline(bufnr, 1, '$'), 'len(v:val)')
-    call s:OpenFloatEdit(max(widths) + 1, len(widths))
-    stopinsert
+  " Capture output to a variable. A Callback will be invoked once the output is gathered.
+  if exists('s:console_command_output')
+    execute printf('let s:console_command_output ..= %s', a:msg[1:])
   endif
 endfunc
 
@@ -2596,7 +2574,8 @@ func s:HandleStackVariables(arg, pat, dict)
   endfor
 endfunc
 
-func s:HandleShow(depth, dict)
+" XXX: When -gdb-set works and returns a dictionary
+func s:HandleDictShow(depth, dict)
   let width = getbufvar(s:prompt_bufnr, '&sw')
   let indent = repeat(" ", a:depth * width)
 
@@ -2615,6 +2594,13 @@ func s:HandleShow(depth, dict)
       endif
     endfor
   endif
+endfunc
+
+" XXX: When -gdb-set does NOT work and we have to use the console command.
+func s:HandleConsoleShow(output)
+  for line in a:output
+    call s:ShowNormal(line)
+  endfor
 endfunc
 
 func s:HandleVarChildren(lnum, parent_var, dict)
@@ -2977,7 +2963,6 @@ endfunc
 func s:HandleError(dict)
   call s:ClosePreview()
   call s:CloseFloatEdit()
-  call s:StopFloatingOutput()
   let lines = split(a:dict['msg'], "\n")
   for line in lines
     call s:ShowError(line)
