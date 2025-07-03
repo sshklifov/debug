@@ -82,7 +82,7 @@ func PromptDebugGoToBreakpoint(id)
     echo "No source for " . id
     return
   endif
-  let fullname = breakpoint['fullname']
+  let fullname = simplify(breakpoint['fullname'])
   if expand("%:p") != fullname
     exe "e " . fnameescape(fullname)
   endif
@@ -1940,7 +1940,7 @@ endfunc
 
 func s:PlaceSourceCursor(dict)
   let ns = nvim_create_namespace('PromptDebugPC')
-  let filename = get(a:dict, 'fullname', '')
+  let filename = simplify(get(a:dict, 'fullname', ''))
   let lnum = get(a:dict, 'line', '')
   if filereadable(filename) && str2nr(lnum) > 0
     if g:promptdebug_check_timestamps
@@ -2132,7 +2132,7 @@ func s:AddBreakpoint(bkpt, parent)
   let item = s:breakpoints[id]
   let item['enabled'] = a:bkpt['enabled'] == 'y'
   if has_key(a:bkpt, 'fullname')
-    let item['fullname'] = a:bkpt['fullname']
+    let item['fullname'] = simplify(a:bkpt['fullname'])
     let item['lnum'] = a:bkpt['line']
   endif
   if !empty(a:parent)
@@ -2465,7 +2465,7 @@ func s:FormatBreakpointMessage(bkpt, parent)
     let enabled = enabled && a:parent['enabled'] == 'y'
   endif
   let number_item = ["*" .. nr, 'debugIdentifier']
-  let jumpable = has_key(a:bkpt, 'fullname') && filereadable(a:bkpt['fullname'])
+  let jumpable = has_key(a:bkpt, 'fullname') && filereadable(simplify(a:bkpt['fullname']))
 
   let type = get(a:bkpt, 'type', '')
   if stridx(type, "watchpoint") >= 0
@@ -2507,7 +2507,7 @@ func s:FormatBreakpointMessage(bkpt, parent)
     call nvim_buf_set_extmark(s:prompt_bufnr, ns, lnum - 1, 0, opts)
   endif
   if jumpable
-    call s:ConcealJump(a:bkpt['fullname'], a:bkpt['line'])
+    call s:ConcealJump(simplify(a:bkpt['fullname']), a:bkpt['line'])
   endif
 endfunc
 
@@ -2527,14 +2527,14 @@ func s:HandleThreadStack(id, dict)
 
   let prefix = "/home/" .. $USER
   for frame in frames
-    let fullname = get(frame, 'fullname', '')
+    let fullname = simplify(get(frame, 'fullname', ''))
     if filereadable(fullname) && stridx(fullname, prefix) == 0
       return s:ShowThreadFrame(a:id, frame)
     endif
   endfor
   " Try a second time without the prefix
   for frame in frames
-    let fullname = get(frame, 'fullname', '')
+    let fullname = simplify(get(frame, 'fullname', ''))
     if filereadable(fullname)
       return s:ShowThreadFrame(a:id, frame)
     endif
@@ -2656,7 +2656,7 @@ func s:HandleSymbolInfo(dict)
   " Look in debug section
   let dbg = s:Get(a:dict, 'symbols', 'debug', [])
   for location in dbg
-    let filename = location['fullname']
+    let filename = simplify(location['fullname'])
     let valid = filereadable(filename)
     for symbol in location['symbols']
       let lnum = symbol['line']
@@ -2775,7 +2775,7 @@ endfunc
 
 func s:FormatFrameMessageWithTag(tag, dict)
   let frame = a:dict
-  const jumpable = has_key(frame, 'fullname') && filereadable(frame['fullname'])
+  const jumpable = has_key(frame, 'fullname') && filereadable(simplify(frame['fullname']))
   let location = "???"
   if has_key(frame, 'fullname')
     let location = fnamemodify(frame['fullname'], ":t")
@@ -2833,11 +2833,10 @@ func s:HandleFrameMount(dir, dict)
     if !has_key(frame, 'fullname')
       continue
     endif
-    let fullname = frame['fullname']
+    let fullname = simplify(frame['fullname'])
     if filereadable(fullname)
       continue
     endif
-    let fullname = resolve(fullname)
     let basename = fnamemodify(fullname, ':t')
     if has_key(failed_basenames, basename)
       continue
@@ -2944,7 +2943,7 @@ func s:HandleFrameChange(going_up, dict)
     endif
   else
     for frame in frames
-      let fullname = get(frame, 'fullname', '')
+      let fullname = simplify(get(frame, 'fullname', ''))
       if filereadable(fullname)
         call s:ShowMessage([["Switching to frame #" .. frame['level'], "Normal"]])
         call s:RefreshCursorSign(frame)
