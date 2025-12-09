@@ -239,7 +239,7 @@ func PromptDebugGetState()
 endfunc
 
 func PromptDebugEnableTimings()
-  call s:SendMICommandNoOutput('-enable-timings')
+  call s:SendMICommandNoOutput('-enable-timings yes')
 endfunc
 
 func PromptDebugPrettyPrinter(regs, func)
@@ -267,6 +267,20 @@ endfunc
 " }}}
 
 """"""""""""""""""""""""""""""""SendMICommand"""""""""""""""""""""""""""""""""{{{
+func s:SetPromptState(variable, value)
+  " Set either s:stopped or s:command_queued
+  call assert_true(a:variable == 'stopped' || a:variable == 'command_queued')
+  let s:[a:variable] = a:value
+  " Gray out '(gdb)' prompt if running
+  const freeze_prompt = (!s:stopped || s:command_queued)
+  let ns = nvim_create_namespace('PromptDebugPrompt')
+  call nvim_buf_clear_namespace(s:prompt_bufnr, ns, 0, -1)
+  if freeze_prompt
+    let lines = nvim_buf_line_count(s:prompt_bufnr)
+    call nvim_buf_set_extmark(s:prompt_bufnr, ns, lines - 1, 0, #{line_hl_group: 'Comment'})
+  endif
+endfunc
+
 func s:SendMICommand(cmd, Callback)
   let token = s:token_counter
   let s:token_counter += 1
@@ -280,6 +294,7 @@ func s:SendMICommand(cmd, Callback)
     call appendbufline(s:capture_bufnr, "$", '<--- ' .. cmd)
   endif
   " Send command to GDB
+  call s:SetPromptState('command_queued', 1)
   call chansend(s:gdb_job_id, cmd . "\n")
 endfunc
 
@@ -403,6 +418,7 @@ func PromptDebugStart(...)
   let s:hl_inst = ''
   let s:source_bufnr = -1
   let s:stopped = 1
+  let s:command_queued = 0
   let s:asm_mode = 0
   let s:sourcewin = win_getid()
   let s:comm_buf = ""
@@ -1747,7 +1763,7 @@ func s:CommOutput(start_time, msg)
   " Async record
   let async = s:GetAsyncClass(a:msg)
   if !empty(async)
-    " XXX: Not sure how to integrate timings with async methods...
+    " Timings are not relevant for async methods. There is no request in order to measure response delay.
     return s:HandleAsync(a:msg)
   endif
   " Result record
@@ -1783,6 +1799,12 @@ func s:HandleResult(start_time, msg)
   let result = s:GetResultClass(a:msg)
   let token = s:GetResultToken(a:msg)
   let dict = EvalCommaResults(a:msg)
+
+  " Check if this is the last command queued.
+  if token + 1 == s:token_counter
+    call s:SetPromptState('command_queued', 0)
+  endif
+
   if result == 'done'
     if str2nr(token) > 0 && has_key(s:callbacks, token)
       let cmd = s:callbacks[token][0]
@@ -1848,21 +1870,14 @@ func s:HandleCursor(class, dict)
       endif
       let s:selected_thread = a:dict['thread-id']
     endif
-    let s:stopped = 1
+    call s:SetPromptState('stopped', 1)
     let s:selected_frame = 0
     call s:OnInferiorStopped(a:dict)
   elseif a:class == 'running'
     let id = a:dict['thread-id']
     if id == 'all' || (exists('s:selected_thread') && id == s:selected_thread)
-      let s:stopped = 0
+      call s:SetPromptState('stopped', 0)
     endif
-  endif
-  " Gray out '(gdb)' prompt if running
-  let ns = nvim_create_namespace('PromptDebugPrompt')
-  call nvim_buf_clear_namespace(s:prompt_bufnr, ns, 0, -1)
-  if !s:stopped
-    let lines = nvim_buf_line_count(s:prompt_bufnr)
-    call nvim_buf_set_extmark(s:prompt_bufnr, ns, lines - 1, 0, #{line_hl_group: 'Comment'})
   endif
   " Update cursor
   call s:ClearCursorSign()
