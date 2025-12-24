@@ -40,8 +40,8 @@ call s:DefineOption('g:promptdebug_check_timestamps', 1)
 " Create an additional terminal which will capture inferior stdout
 call s:DefineOption('g:promptdebug_program_output', 1)
 
-" Filter 'info threads' output by displaying jumpable threads only
-call s:DefineOption('g:promptdebug_thread_filter', 1)
+" Show less frames (important frames only).
+call s:DefineOption('g:promptdebug_frame_filter', 1)
 
 " Enable binary reverse engineering features.
 call s:DefineOption('g:promptdebug_reverse_eng', 1)
@@ -1338,8 +1338,8 @@ func s:InfoCommand()
   call s:ShowMessage([option, enabled[g:promptdebug_check_timestamps]])
   let option = ["  Capture stdout in a buffer: ", "Normal"]
   call s:ShowMessage([option, enabled[g:promptdebug_program_output]])
-  let option = ["  Filter 'info threads' with jumpable threads only: ", "Normal"]
-  call s:ShowMessage([option, enabled[g:promptdebug_thread_filter]])
+  let option = ["  Show less frames: ", "Normal"]
+  call s:ShowMessage([option, enabled[g:promptdebug_frame_filter]])
 endfunc
 " }}}
 
@@ -2540,7 +2540,7 @@ endfunc
 func s:HandleThreadStack(id, dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
 
-  let prefix = "/home/" .. $USER
+  const prefix = "/home/" .. $USER
   for frame in frames
     let fullname = simplify(get(frame, 'fullname', ''))
     if filereadable(fullname) && stridx(fullname, prefix) == 0
@@ -2555,7 +2555,7 @@ func s:HandleThreadStack(id, dict)
     endif
   endfor
 
-  if g:promptdebug_thread_filter
+  if g:promptdebug_frame_filter
     return
   endif
   " One more try with just a function name
@@ -2935,8 +2935,12 @@ endfunc
 
 func s:HandleFrameList(dict)
   let frames = s:GetListWithKeys(a:dict, 'stack')
+  const prefix = "/home/" .. $USER
   for frame in frames
-    call s:ShowFrame(frame)
+    let fullname = simplify(get(frame, 'fullname', ''))
+    if !g:promptdebug_frame_filter || (filereadable(fullname) && stridx(fullname, prefix)) == 0
+      call s:ShowFrame(frame)
+    endif
   endfor
 endfunc
 
