@@ -462,7 +462,7 @@ endfunc
 func s:LaunchGdb(tty)
   let gdb_cmd = [g:promptdebugger]
   " Add -quiet to avoid the intro message causing a hit-enter prompt.
-  call add(gdb_cmd, '-quiet')
+  call add(gdb_cmd, '--quiet')
   " Communicate with GDB in the background via MI interface
   call add(gdb_cmd, '--interpreter=mi')
   " Disable pagination, it causes everything to stop
