@@ -956,8 +956,10 @@ func s:PromptOutput(cmd)
     return s:SaveBreakpoints('user_saved_brs')
   elseif name == "brsource"
     if exists('s:user_saved_brs')
+      call s:ShowNormal("Using user saved breakpoints.")
       return s:RestoreBreakpoints('user_saved_brs')
     elseif exists('s:auto_saved_brs')
+      call s:ShowNormal("Using auto saved breakpoints.")
       return s:RestoreBreakpoints('auto_saved_brs')
     else
       return s:ShowError("No breakpoints from previous are saved!")
@@ -1052,7 +1054,7 @@ func s:PromptOutput(cmd)
     elseif cmd[0]->s:IsCommand("mount", 3)
       return s:MountCommand(cmd[1:])
     elseif cmd[0]->s:IsCommand("maps", 3)
-      if cmd[1] == "find"
+      if len(cmd) > 1 && cmd[1] == "find"
         return s:MapFindCommand(cmd[2:])
       else
         return s:MapsCommand(cmd[1:])
@@ -1326,12 +1328,17 @@ func s:InfoCommand()
   call s:ShowMessage([feature, enabled[g:promptdebug_override_t]])
   let feature = ["  info (partial): ", "Normal"]
   call s:ShowMessage([feature, enabled[g:promptdebug_override_info]])
-  let feature = ["  Enable reverse engineering commands: ", "Normal"]
+
+  let feature = ["Enable reverse engineering commands: ", "Normal"]
   call s:ShowMessage([feature, enabled[g:promptdebug_reverse_eng]])
+  call s:ShowMessage([["  'brsave' and 'brsource' to manage breakpoints between runs.", "Normal"]])
+  call s:ShowMessage([["  'cl' (Continue to link register).", "Normal"]])
+  call s:ShowMessage([["  'mount' a directory to resolve current stack frame.", "Normal"]])
+  call s:ShowMessage([["  Show process 'maps' and filter with keyword.", "Normal"]])
+  call s:ShowMessage([["  or with an expression 'map find <expr>'.", "Normal"]])
+  call s:ShowMessage([["  Show open file descriptors 'lsof'.", "Normal"]])
 
   call s:ShowNormal("Current options are set:")
-  let option = ["  Execute unsupported commands silently: ", "Normal"]
-  call s:ShowMessage([option, enabled[g:promptdebug_silent_mode]])
   let option = ["  Display source tags when program stops: ", "Normal"]
   call s:ShowMessage([option, enabled[g:promptdebug_show_source]])
   let option = ["  Check if executable is out-of-date: ", "Normal"]
