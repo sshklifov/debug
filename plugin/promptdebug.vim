@@ -1447,14 +1447,25 @@ func s:PrintCommand(cmd, expr)
     let key = a:cmd[slash+1:]
     let format_map = {'x': 'hexadecimal', 'd': 'decimal',
           \ 'o': 'octal', 't': 'binary', 'z': 'zero-hexadecimal'}
-    if !has_key(format_map, key)
+    if has_key(format_map, key)
+      let format = format_map[key]
+      let Cb = function('s:ShowFormatVar', [format, a:expr])
+      return s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(a:expr), Cb)
+    elseif key == 's'
+      let Cb = function('s:ShowFormatVar', ['', a:expr])
+      let expr = printf("(const char*)(%s)", a:expr)
+      return s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(expr), Cb)
+    elseif key == 'c'
+      let Cb = function('s:ShowFormatVar', ['', a:expr])
+      let expr = printf("(char)(%s)", a:expr)
+      return s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(expr), Cb)
+    else
       return s:ShowWarning("Unkown format: " .. a:cmd)
     endif
-    let format = format_map[key]
+  else
+    let Cb = function('s:ShowFormatVar', ['', a:expr])
+    call s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(a:expr), Cb)
   endif
-
-  let Cb = function('s:ShowFormatVar', [format, a:expr])
-  call s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(a:expr), Cb)
 endfunc
 
 func s:PrintVectorCommand(expr)
@@ -1477,7 +1488,7 @@ func s:HandleVectorSize(expr, dict)
   for i in range(capped_len)
     let display_name = printf("%s[%d]", a:expr, i)
     let expr = printf("%s._M_impl._M_start[%d]", a:expr, i)
-    let Cb = function('s:ShowFormatVar', ['natural', display_name])
+    let Cb = function('s:ShowFormatVar', ['', display_name])
     call s:SendMICommand('-var-create - * ' . s:EscapeMIArgument(expr), Cb)
   endfor
 endfunc
@@ -1524,7 +1535,7 @@ endfunc
 func s:ShowFormatVar(format, display_name, dict)
   let lnum = nvim_buf_line_count(s:prompt_bufnr) - 1
   call s:RegisterNewVar(a:dict, a:display_name)
-  if a:format == 'natural'
+  if empty(a:format)
     call s:ShowElided(lnum, a:dict['name'])
   else
     let Cb = function('s:ShowEvaluation', [lnum, 0, a:display_name]) 
@@ -1904,7 +1915,12 @@ func s:ShowStopReason(dict)
   call s:ShowNormal("")
 
   if reason == 'breakpoint-hit'
-    let msg = "Breakpoint hit."
+    let msg = "Breakpoint "
+    if has_key(a:dict, 'bkptno')
+      let msg = printf("Breakpoint %s hit.", a:dict['bkptno'])
+    else
+      let msg = "Breakpoint hit."
+    endif
   elseif reason == 'watchpoint-scope'
     let msg = "Watchpoint out of scope!"
   elseif reason == 'no-history'
