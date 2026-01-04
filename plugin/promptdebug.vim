@@ -19,6 +19,10 @@ endfunc
 " Name of the gdb command
 call s:DefineOption('g:promptdebugger', 'gdb')
 
+" File where breakpoints will be saved.
+call s:DefineOption('g:promptdebug_br_auto_script', stdpath("state") .. "/brsave_auto.txt")
+call s:DefineOption('g:promptdebug_br_manual_script', stdpath("state") .. "/brsave_manual.txt")
+
 " Whether :commands should be installed
 call s:DefineOption('g:promptdebug_commands', 1)
 
@@ -376,7 +380,7 @@ func PromptDebugStart(...)
   endif
 
   " Remove all prior variables
-  let persistent_vars = ["command_hist", "user_saved_brs", "auto_saved_brs"]
+  let persistent_vars = ["command_hist"]
   for varname in keys(s:)
     if index(persistent_vars, varname) < 0
       exe "silent! unlet s:" . varname
@@ -674,8 +678,8 @@ endfunc
 
 func s:OpenHistory()
   if !empty(s:command_hist)
-    call s:OpenScrollablePreview("History", copy(s:command_hist))
-    call s:ScrollPreview("$")
+    call s:OpenScrollablePreview("History", reverse(copy(s:command_hist)))
+    call s:ScrollPreview("1")
     call s:ClosePreviewOn('InsertLeave', 'CursorMovedI')
   endif
 endfunc
@@ -953,16 +957,14 @@ func s:PromptOutput(cmd)
 
   " Custom commands
   if name == "brsave"
-    return s:SaveBreakpoints('user_saved_brs')
+    return s:SaveBreakpoints(g:promptdebug_br_manual_script)
   elseif name == "brsource"
-    if exists('s:user_saved_brs')
-      call s:ShowNormal("Using user saved breakpoints.")
-      return s:RestoreBreakpoints('user_saved_brs')
-    elseif exists('s:auto_saved_brs')
-      call s:ShowNormal("Using auto saved breakpoints.")
-      return s:RestoreBreakpoints('auto_saved_brs')
+    if len(cmd) < 2
+      return s:RestoreBreakpoints(g:promptdebug_br_manual_script)
+    elseif cmd[1] == "auto"
+      return s:RestoreBreakpoints(g:promptdebug_br_auto_script)
     else
-      return s:ShowError("No breakpoints from previous are saved!")
+      return s:ShowError('Did you mean "auto"?')
     endif
   endif
 
@@ -1089,23 +1091,24 @@ func s:CommandsCommand(brs)
   endif
 endfunc
 
-func s:SaveBreakpoints(where)
+func s:SaveBreakpoints(file)
   let valid_brs = filter(values(s:breakpoints), 'has_key(v:val, "fullname")')
   if empty(valid_brs)
     return s:ShowError("No breakpoints.")
   endif
-  let saved_br_locs = map(copy(valid_brs), 'v:val.fullname .. ":" .. v:val.lnum')
-  let saved_br_cmds = map(valid_brs, 'get(v:val, "script", [])')
-  let s:[a:where] = [saved_br_locs, saved_br_cmds]
+
+  let locs = map(copy(valid_brs), 'v:val.fullname .. ":" .. v:val.lnum')
+  let cmds = map(valid_brs, 'get(v:val, "script", [])')
+  call writefile([string([locs, cmds])], a:file)
 endfunc
 
-func s:RestoreBreakpoints(where)
-  let br_state = get(s:, a:where, [])
-  if empty(br_state)
-    return s:ShowError("No breakpoints are saved!")
+func s:RestoreBreakpoints(file)
+  let cache = filereadable(a:file) ? readfile(a:file) : []
+  if len(cache) < 1
+    return s:ShowError("No breakpoints from previous session are saved!")
   endif
-  let locs = br_state[0]
-  let cmds = br_state[1]
+
+  let [locs, cmds] = eval(cache[0])
   for idx in range(len(locs))
     let Cb = function('s:HandleRestoredBreakpoint', [cmds[idx]])
     call s:SendMICommand("-break-insert " .. s:EscapeMIArgument(locs[idx]), Cb)
@@ -3217,7 +3220,7 @@ func s:EndPromptDebug(job_id, exit_code, event)
   endif
 
   " In case user forgot to type brsave
-  call s:SaveBreakpoints('auto_saved_brs')
+  call s:SaveBreakpoints(g:promptdebug_br_auto_script)
 
   silent! autocmd! PromptDebug
   silent! autocmd! PromptDebugPreview
